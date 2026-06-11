@@ -1,15 +1,31 @@
-export default function Home() {
-  return (
-    <main className="min-h-screen bg-black text-white flex items-center justify-center">
-      <div className="text-center">
-        <h1 className="text-5xl font-bold mb-4">
-          Wallet Chat
-        </h1>
+"use client";
 
-        <p className="text-zinc-400 text-lg">
-          Telegram for Solana wallets
-        </p>
-      </div>
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { useWallet } from "@solana/wallet-adapter-react";
+
+export default function Home() {
+  const { publicKey } = useWallet();
+
+  return (
+    <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center gap-6">
+      
+      <h1 className="text-4xl font-bold">
+        Wallet Chat
+      </h1>
+
+      <p className="text-zinc-400">
+        Telegram for Solana wallets
+      </p>
+
+      <WalletMultiButton />
+
+      {publicKey && (
+        <div className="mt-6 text-green-400 text-sm text-center">
+          Connected:<br />
+          {publicKey.toBase58()}
+        </div>
+      )}
+
     </main>
   );
 }
