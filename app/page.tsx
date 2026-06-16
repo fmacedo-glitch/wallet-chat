@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 import { supabase } from "../lib/supabase";
 
@@ -19,10 +19,88 @@ export default function Home() {
   const [receiver, setReceiver] = useState("");
   const [message, setMessage] = useState("");
 
+  const [username, setUsername] = useState("");
+const [savedUsername, setSavedUsername] = useState("");
+
+const [profiles, setProfiles] = useState<any>({});
+
   const [inboxMessages, setInboxMessages] = useState<any[]>([]);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
 
   const [activeChat, setActiveChat] = useState("");
+
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  const [unreadCounts, setUnreadCounts] = useState<any>({});
+
+  async function fetchProfiles() {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*");
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  const map: any = {};
+
+  data?.forEach((profile) => {
+    map[profile.wallet] = profile;
+  });
+
+  setProfiles(map);
+}
+
+function getDisplayName(wallet?: string) {
+  if (!wallet) return "Unknown";
+
+  const profile = profiles[wallet];
+
+  if (profile?.username) {
+    return `@${profile.username}`;
+  }
+
+  return `${wallet.slice(0, 4)}...${wallet.slice(-4)}`;
+}
+
+async function saveProfile() {
+  if (!publicKey) return;
+
+  const { error } = await supabase
+    .from("profiles")
+    .upsert({
+      wallet: publicKey.toBase58(),
+      username,
+    });
+
+  if (error) {
+    console.error(error);
+    alert("Error saving profile");
+    return;
+  }
+
+  setSavedUsername(username);
+
+  fetchProfiles();
+
+  alert("Profile saved!");
+}
+
+async function loadProfile() {
+  if (!publicKey) return;
+
+  const { data } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("wallet", publicKey.toBase58())
+    .single();
+
+  if (data) {
+    setUsername(data.username || "");
+    setSavedUsername(data.username || "");
+  }
+}
 
   async function sendMessage() {
     if (!publicKey) {
@@ -60,41 +138,65 @@ export default function Home() {
     if (!publicKey) return;
 
     const { data, error } = await supabase
-      .from("messages")
-      .select("*")
-      .eq("receiver", publicKey.toBase58())
-      .order("created_at", { ascending: false });
+  .from("messages")
+  .select("*")
+  .or(
+    `sender.eq.${publicKey.toBase58()},receiver.eq.${publicKey.toBase58()}`
+  )
+  .order("created_at", { ascending: false });
 
     if (error) {
       console.error(error);
       return;
     }
 
-    const uniqueWallets = new Map();
+    const latestMessages = new Map();
 
-    data?.forEach((msg) => {
-      if (!uniqueWallets.has(msg.sender)) {
-        uniqueWallets.set(msg.sender, msg);
-      }
+data?.forEach((msg) => {
+
+  const otherWallet =
+    msg.sender === publicKey.toBase58()
+      ? msg.receiver
+      : msg.sender;
+
+  if (!latestMessages.has(otherWallet)) {
+    latestMessages.set(otherWallet, {
+      ...msg,
+      otherWallet,
     });
-
-    setInboxMessages(
-      Array.from(uniqueWallets.values())
-    );
   }
+});
+
+setInboxMessages(
+  Array.from(latestMessages.values())
+);
+  }
+
+useEffect(() => {
+  messagesEndRef.current?.scrollIntoView({
+    behavior: "auto",
+  });
+}, [chatMessages]);
+
 
   async function loadConversation(wallet: string) {
     if (!publicKey) return;
 
     setActiveChat(wallet);
 
+    setUnreadCounts((prev: any) => ({
+  ...prev,
+  [wallet]: 0,
+}));
+
     const { data, error } = await supabase
-      .from("messages")
-      .select("*")
-      .or(
-        `and(sender.eq.${publicKey.toBase58()},receiver.eq.${wallet}),and(sender.eq.${wallet},receiver.eq.${publicKey.toBase58()})`
-      )
-      .order("created_at", { ascending: true });
+  .from("messages")
+  .select("*")
+  .or(
+    `and(sender.eq.${publicKey.toBase58()},receiver.eq.${wallet}),and(sender.eq.${wallet},receiver.eq.${publicKey.toBase58()})`
+  )
+  .order("created_at", { ascending: true })
+  .limit(50);
 
     if (error) {
       console.error(error);
@@ -106,6 +208,9 @@ export default function Home() {
 
   useEffect(() => {
     fetchInbox();
+
+    fetchProfiles();
+loadProfile();
 
     if (!publicKey) return;
 
@@ -128,6 +233,20 @@ export default function Home() {
               const exists = prev.find(
                 (m) => m.sender === newMessage.sender
               );
+
+              if (newMessage.sender !== activeChat) {
+ setUnreadCounts((prev: any) => {
+
+  if (activeChat === newMessage.sender) {
+    return prev;
+  }
+
+  return {
+    ...prev,
+    [newMessage.sender]: 1,
+  };
+});
+}
 
               if (exists) {
                 return prev;
@@ -163,7 +282,7 @@ export default function Home() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [publicKey, activeChat]);
+  }, [publicKey]);
 
   return (
     <main className="min-h-screen bg-black text-white flex flex-col items-center p-6">
@@ -185,6 +304,34 @@ export default function Home() {
               {publicKey.toBase58()}
             </div>
           )}
+
+<div className="mt-6 border-t border-zinc-800 pt-6">
+
+  <h2 className="text-lg font-bold mb-3">
+    Profile
+  </h2>
+
+  <input
+    value={username}
+    onChange={(e) => setUsername(e.target.value)}
+    placeholder="Username"
+    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-sm"
+  />
+
+  <button
+    onClick={saveProfile}
+    className="w-full bg-green-600 rounded-lg p-3 font-bold mt-3"
+  >
+    Save Profile
+  </button>
+
+  {savedUsername && (
+    <div className="text-sm text-zinc-400 mt-3">
+      @{savedUsername}
+    </div>
+  )}
+
+</div>
 
           <div className="mt-8">
 
@@ -212,17 +359,35 @@ export default function Home() {
 
             {inboxMessages.map((msg) => (
               <button
-                key={msg.sender}
-                onClick={() => loadConversation(msg.sender)}
+                key={getDisplayName(msg.otherWallet)}
+                onClick={() => loadConversation(msg.otherWallet)}
                 className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 text-left"
               >
-                <div className="text-xs text-zinc-500 break-all mb-2">
-                  {msg.sender}
-                </div>
+                <div className="mb-2">
 
-                <div className="truncate">
-                  {msg.content}
-                </div>
+  <div className="text-green-400 text-sm">
+    {getDisplayName(msg.otherWallet)}
+  </div>
+
+  <div className="text-[10px] text-zinc-500 break-all">
+    {msg.otherWallet}
+  </div>
+
+</div>
+
+                <div className="flex items-center justify-between gap-2">
+
+  <div className="truncate">
+    {msg.content}
+  </div>
+
+  {unreadCounts[msg.sender] > 0 && (
+    <div className="min-w-5 h-5 px-1 rounded-full bg-red-600 text-white text-xs flex items-center justify-center">
+      {unreadCounts[msg.sender]}
+    </div>
+  )}
+
+</div>
               </button>
             ))}
 
@@ -243,7 +408,7 @@ export default function Home() {
                 </div>
 
                 <div className="text-green-400 break-all">
-                  {activeChat}
+                  {getDisplayName(activeChat)}
                 </div>
 
               </div>
@@ -262,6 +427,8 @@ export default function Home() {
                     {msg.content}
                   </div>
                 ))}
+
+                <div ref={messagesEndRef} />
 
               </div>
 
