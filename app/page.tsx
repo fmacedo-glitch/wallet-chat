@@ -69,12 +69,27 @@ async function addFriend(wallet: string) {
 
   const me = publicKey.toBase58();
 
+  // 1. verificăm dacă există deja request
+  const { data } = await supabase
+    .from("friends")
+    .select("*")
+    .or(
+      `and(sender.eq.${me},receiver.eq.${wallet}),and(sender.eq.${wallet},receiver.eq.${me})`
+    )
+    .maybeSingle();
+
+  // 2. dacă există → NU mai trimitem
+  if (data) return;
+
+  // 3. trimitem request nou
   await supabase.from("friends").insert({
     sender: me,
     receiver: wallet,
+    accepted: false,
   });
 
   fetchFriends();
+  fetchFriendRequests();
 }
 
 async function unfriend(wallet: string) {
@@ -98,10 +113,11 @@ async function fetchFriends() {
 
   const me = publicKey.toBase58();
 
-  const { data } = await supabase
-    .from("friends")
-    .select("*")
-    .or(`sender.eq.${me},receiver.eq.${me}`);
+ const { data } = await supabase
+  .from("friends")
+  .select("*")
+  .eq("accepted", true)
+  .or(`sender.eq.${me},receiver.eq.${me}`);
 
   setFriends(data || []);
 }
@@ -114,6 +130,44 @@ function isFriend(wallet: string) {
       (f.sender === me && f.receiver === wallet) ||
       (f.receiver === me && f.sender === wallet)
   );
+}
+
+
+const [friendRequests, setFriendRequests] = useState<any[]>([]);
+
+async function fetchFriendRequests() {
+  if (!publicKey) return;
+
+  const me = publicKey.toBase58();
+
+  const { data } = await supabase
+    .from("friends")
+    .select("*")
+    .eq("accepted", false)
+    .or(
+      `sender.eq.${me},receiver.eq.${me}`
+    );
+
+  setFriendRequests(data || []);
+}
+
+async function acceptFriend(id: string) {
+  await supabase
+    .from("friends")
+    .update({ accepted: true })
+    .eq("id", id);
+
+  fetchFriends();
+  fetchFriendRequests();
+}
+
+async function rejectFriend(id: string) {
+  await supabase
+    .from("friends")
+    .delete()
+    .eq("id", id);
+
+  fetchFriendRequests();
 }
 
 async function saveProfile() {
@@ -261,7 +315,7 @@ useEffect(() => {
   useEffect(() => {
     fetchInbox();
     fetchFriends();
-
+fetchFriendRequests();
 
     fetchProfiles();
 loadProfile();
@@ -331,6 +385,20 @@ loadProfile();
           }
         }
       )
+
+      .on(
+  "postgres_changes",
+  {
+    event: "*",
+    schema: "public",
+    table: "friends",
+  },
+  () => {
+    fetchFriends();
+    fetchFriendRequests();
+  }
+)
+
       .subscribe();
 
     return () => {
@@ -484,13 +552,62 @@ loadProfile();
     );
   })}
 
+  <div className="mt-6">
+
+  <h2 className="text-lg font-bold mb-2">
+    Friend Requests
+  </h2>
+
+  {friendRequests.length === 0 && (
+    <div className="text-xs text-zinc-500">
+      No requests
+    </div>
+  )}
+
+  {friendRequests
+  .filter(
+    (r) =>
+      r.receiver === publicKey?.toBase58()
+  )
+  .map((r) => (
+    <div
+      key={r.id}
+      className="bg-zinc-900 p-2 rounded mb-2"
+    >
+
+      <div className="text-sm">
+        {getDisplayName(r.sender)}
+      </div>
+
+      <div className="flex gap-2 mt-2">
+
+        <button
+          onClick={() => acceptFriend(r.id)}
+          className="bg-green-600 px-2 py-1 text-xs rounded"
+        >
+          Accept
+        </button>
+
+        <button
+          onClick={() => rejectFriend(r.id)}
+          className="bg-red-600 px-2 py-1 text-xs rounded"
+        >
+          Reject
+        </button>
+
+      </div>
+
+    </div>
+  ))}
+</div>
+
 </div>
 
           </div>
 
         </div>
 
-        {/* CHAT */}
+        {/* CHATwindow */}
 
         <div className="flex-1 h-[85vh] bg-zinc-950 border border-zinc-800 rounded-xl p-6 flex flex-col">
 
@@ -508,21 +625,39 @@ loadProfile();
 
                 <div className="mt-3">
 
-  {!isFriend(activeChat) ? (
-    <button
-      onClick={() => addFriend(activeChat)}
-      className="bg-green-600 px-3 py-1 rounded"
-    >
-      Add Friend
-    </button>
-  ) : (
-    <button
-      onClick={() => unfriend(activeChat)}
-      className="bg-red-600 px-3 py-1 rounded"
-    >
-      Unfriend
-    </button>
-  )}
+{isFriend(activeChat) ? (
+
+  <button
+    onClick={() => unfriend(activeChat)}
+    className="bg-red-600 px-3 py-1 rounded"
+  >
+    Unfriend
+  </button>
+
+) : friendRequests.some(
+  (r) =>
+    r.sender === publicKey?.toBase58() &&
+    r.receiver === activeChat &&
+    r.accepted === false
+) ? (
+
+  <button
+    disabled
+    className="bg-yellow-600 px-3 py-1 rounded opacity-70"
+  >
+    Request Sent
+  </button>
+
+) : (
+
+  <button
+    onClick={() => addFriend(activeChat)}
+    className="bg-green-600 px-3 py-1 rounded"
+  >
+    Add Friend
+  </button>
+
+)}
 
 </div>
 
