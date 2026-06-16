@@ -18,7 +18,7 @@ export default function Home() {
 
   const [receiver, setReceiver] = useState("");
   const [message, setMessage] = useState("");
-
+const [friends, setFriends] = useState<any[]>([]);
   const [username, setUsername] = useState("");
 const [savedUsername, setSavedUsername] = useState("");
 
@@ -62,6 +62,58 @@ function getDisplayName(wallet?: string) {
   }
 
   return `${wallet.slice(0, 4)}...${wallet.slice(-4)}`;
+}
+
+async function addFriend(wallet: string) {
+  if (!publicKey) return;
+
+  const me = publicKey.toBase58();
+
+  await supabase.from("friends").insert({
+    sender: me,
+    receiver: wallet,
+  });
+
+  fetchFriends();
+}
+
+async function unfriend(wallet: string) {
+  if (!publicKey) return;
+
+  const me = publicKey.toBase58();
+
+  await supabase
+    .from("friends")
+    .delete()
+    .or(
+      `and(sender.eq.${me},receiver.eq.${wallet}),and(sender.eq.${wallet},receiver.eq.${me})`
+    );
+
+  fetchFriends();
+}
+
+
+async function fetchFriends() {
+  if (!publicKey) return;
+
+  const me = publicKey.toBase58();
+
+  const { data } = await supabase
+    .from("friends")
+    .select("*")
+    .or(`sender.eq.${me},receiver.eq.${me}`);
+
+  setFriends(data || []);
+}
+
+function isFriend(wallet: string) {
+  const me = publicKey?.toBase58();
+
+  return friends.some(
+    (f) =>
+      (f.sender === me && f.receiver === wallet) ||
+      (f.receiver === me && f.sender === wallet)
+  );
 }
 
 async function saveProfile() {
@@ -208,6 +260,8 @@ useEffect(() => {
 
   useEffect(() => {
     fetchInbox();
+    fetchFriends();
+
 
     fetchProfiles();
 loadProfile();
@@ -357,6 +411,8 @@ loadProfile();
               Inbox
             </h2>
 
+        
+
             {inboxMessages.map((msg) => (
               <button
                 key={getDisplayName(msg.otherWallet)}
@@ -385,11 +441,50 @@ loadProfile();
     <div className="min-w-5 h-5 px-1 rounded-full bg-red-600 text-white text-xs flex items-center justify-center">
       {unreadCounts[msg.sender]}
     </div>
+
   )}
+
+
 
 </div>
               </button>
             ))}
+
+<div className="mt-6">
+
+  <h2 className="text-lg font-bold">
+    Friends
+  </h2>
+
+  {friends.length === 0 && (
+    <div className="text-xs text-zinc-500">
+      No friends yet
+    </div>
+  )}
+
+  {friends.map((f) => {
+
+    const other =
+      f.sender === publicKey?.toBase58()
+        ? f.receiver
+        : f.sender;
+
+    return (
+      <button
+        key={other}
+        onClick={() => loadConversation(other)}
+        className="w-full bg-zinc-900 p-2 rounded mb-2 text-left"
+      >
+
+        <div className="text-green-400 text-sm">
+          {getDisplayName(other)}
+        </div>
+
+      </button>
+    );
+  })}
+
+</div>
 
           </div>
 
@@ -410,6 +505,26 @@ loadProfile();
                 <div className="text-green-400 break-all">
                   {getDisplayName(activeChat)}
                 </div>
+
+                <div className="mt-3">
+
+  {!isFriend(activeChat) ? (
+    <button
+      onClick={() => addFriend(activeChat)}
+      className="bg-green-600 px-3 py-1 rounded"
+    >
+      Add Friend
+    </button>
+  ) : (
+    <button
+      onClick={() => unfriend(activeChat)}
+      className="bg-red-600 px-3 py-1 rounded"
+    >
+      Unfriend
+    </button>
+  )}
+
+</div>
 
               </div>
 
