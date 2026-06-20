@@ -60,6 +60,13 @@ function TypingIndicator() {
 export default function Home() {
   const { publicKey, sendTransaction } = useWallet();
   const [showSendSol, setShowSendSol] = useState(false);
+  const [showNFTs, setShowNFTs] = useState(false);
+  const [nftTab, setNftTab] = useState<"nfts" | "tokens">("nfts");
+  const [nfts, setNfts] = useState<any[]>([]);
+  const [loadingNFTs, setLoadingNFTs] = useState(false);
+  const [nftWallet, setNftWallet] = useState("");
+  const [otherTokens, setOtherTokens] = useState<any[]>([]);
+  const [loadingOtherTokens, setLoadingOtherTokens] = useState(false);
   const [solAmount, setSolAmount] = useState("");
   const [sendingSol, setSendingSol] = useState(false);
   const [walletTokens, setWalletTokens] = useState<any[]>([]);
@@ -478,6 +485,133 @@ export default function Home() {
     }, 300);
   }
 
+  async function fetchNFTs(wallet: string) {
+    if (!wallet) return;
+    setLoadingNFTs(true);
+    setNfts([]);
+    setNftWallet(wallet);
+    try {
+      const HELIUS_KEY = "79a1d2c9-8ab4-4fe1-8ca4-7b49961960fb";
+      const res = await fetch(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getAssetsByOwner",
+          params: {
+            ownerAddress: wallet,
+            page: 1,
+            limit: 50,
+            displayOptions: { showFungible: false, showNativeBalance: false },
+          },
+        }),
+      });
+      const json = await res.json();
+      const items = json?.result?.items || [];
+      const nftList = items
+        .filter((item: any) => {
+          // doar NFT-uri reale
+          const validInterface = (
+            item.interface === "V1_NFT" ||
+            item.interface === "ProgrammableNFT" ||
+            item.interface === "V1_PRINT"
+          );
+          if (!validInterface) return false;
+          // filtram spam: fara royalty = spam de obicei
+          if (item.royalty?.basis_points === 0 && !item.grouping?.length) return false;
+          // filtram daca are "spam" sau "airdrop" in nume
+          const name = (item.content?.metadata?.name || "").toLowerCase();
+          const spamWords = ["spam", "airdrop", "claim", "free", "visit", "www.", "http", ".com", ".io", "token", "reward"];
+          if (spamWords.some(w => name.includes(w))) return false;
+          // filtram daca nu are imagine
+          const hasImage = item.content?.links?.image || item.content?.files?.[0]?.uri;
+          if (!hasImage) return false;
+          return true;
+        })
+        .map((item: any) => ({
+          id: item.id,
+          name: item.content?.metadata?.name || "Unknown NFT",
+          image: item.content?.links?.image || item.content?.files?.[0]?.uri || null,
+          collection: item.grouping?.find((g: any) => g.group_key === "collection")?.group_value || null,
+          collectionName: item.content?.metadata?.symbol || "",
+        }));
+      setNfts(nftList);
+    } catch (err) {
+      console.error(err);
+      setNfts([]);
+    } finally {
+      setLoadingNFTs(false);
+    }
+  }
+
+  async function fetchOtherWalletTokens(wallet: string) {
+    if (!wallet) return;
+    setLoadingOtherTokens(true);
+    setOtherTokens([]);
+    try {
+      const HELIUS_KEY = "79a1d2c9-8ab4-4fe1-8ca4-7b49961960fb";
+
+      // SOL balance
+      const connection = new Connection(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`, "confirmed");
+      const lamports = await connection.getBalance(new PublicKey(wallet));
+      const solBalance = lamports / LAMPORTS_PER_SOL;
+
+      // SPL tokens
+      const res = await fetch(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "searchAssets",
+          params: {
+            ownerAddress: wallet,
+            tokenType: "fungible",
+            page: 1,
+            limit: 50,
+          },
+        }),
+      });
+
+      const json = await res.json();
+      const items = json?.result?.items || [];
+
+      const tokens = items
+        .filter((item: any) => {
+          const bal = item.token_info?.balance;
+          const dec = item.token_info?.decimals ?? 0;
+          const realBalance = bal / Math.pow(10, dec);
+          return bal > 0 && realBalance > 0.000001;
+        })
+        .map((item: any) => {
+          const dec = item.token_info?.decimals ?? 0;
+          const bal = item.token_info?.balance / Math.pow(10, dec);
+          return {
+            mint: item.id,
+            symbol: item.token_info?.symbol || item.content?.metadata?.symbol || item.id.slice(0, 4) + "...",
+            name: item.content?.metadata?.name || item.token_info?.symbol || "Unknown",
+            balance: bal,
+            decimals: dec,
+            logo: item.content?.links?.image || item.content?.files?.[0]?.uri || null,
+          };
+        });
+
+      const solToken = {
+        mint: "SOL", symbol: "SOL", name: "Solana",
+        balance: solBalance, decimals: 9,
+        logo: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
+      };
+
+      setOtherTokens([solToken, ...tokens]);
+    } catch (err) {
+      console.error(err);
+      setOtherTokens([]);
+    } finally {
+      setLoadingOtherTokens(false);
+    }
+  }
+
   async function fetchWalletTokens() {
     if (!publicKey) return;
     setLoadingTokens(true);
@@ -489,19 +623,19 @@ export default function Home() {
       const lamports = await connection.getBalance(publicKey);
       const solBalance = lamports / LAMPORTS_PER_SOL;
 
-      // Fetch SPL tokens via Helius API
+      // Fetch SPL tokens via Helius searchAssets
       const res = await fetch(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           jsonrpc: "2.0",
           id: 1,
-          method: "getAssetsByOwner",
+          method: "searchAssets",
           params: {
             ownerAddress: publicKey.toBase58(),
+            tokenType: "fungible",
             page: 1,
             limit: 50,
-            displayOptions: { showFungible: true, showNativeBalance: true },
           },
         }),
       });
@@ -509,21 +643,26 @@ export default function Home() {
       const json = await res.json();
       const items = json?.result?.items || [];
 
-      // filter only fungible tokens with balance > 0
       const tokens = items
-        .filter((item: any) =>
-          item.interface === "FungibleToken" &&
-          item.token_info?.balance > 0
-        )
-        .map((item: any) => ({
-          mint: item.id,
-          symbol: item.token_info?.symbol || item.content?.metadata?.symbol || "???",
-          name: item.content?.metadata?.name || item.token_info?.symbol || "Unknown",
-          balance: item.token_info?.balance / Math.pow(10, item.token_info?.decimals || 0),
-          decimals: item.token_info?.decimals || 0,
-          logo: item.content?.links?.image || null,
-          isSol: false,
-        }));
+        .filter((item: any) => {
+          const bal = item.token_info?.balance;
+          const dec = item.token_info?.decimals ?? 0;
+          const realBalance = bal / Math.pow(10, dec);
+          return bal > 0 && realBalance > 0.000001;
+        })
+        .map((item: any) => {
+          const dec = item.token_info?.decimals ?? 0;
+          const bal = item.token_info?.balance / Math.pow(10, dec);
+          return {
+            mint: item.id,
+            symbol: item.token_info?.symbol || item.content?.metadata?.symbol || item.id.slice(0, 4) + "...",
+            name: item.content?.metadata?.name || item.token_info?.symbol || "Unknown",
+            balance: bal,
+            decimals: dec,
+            logo: item.content?.links?.image || item.content?.files?.[0]?.uri || null,
+            isSol: false,
+          };
+        });
 
       // SOL first
       const solToken = {
@@ -1107,6 +1246,21 @@ export default function Home() {
 
                 {/* Action buttons — side by side */}
                 <div className="flex gap-2 mt-3 flex-wrap">
+                  <button
+                    onClick={() => {
+                      if (!showNFTs || nftWallet !== activeChat) {
+                        fetchNFTs(activeChat);
+                        fetchOtherWalletTokens(activeChat);
+                      }
+                      setShowNFTs(!showNFTs);
+                      setNftTab("nfts");
+                    }}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      showNFTs ? "bg-purple-600 text-white" : "bg-zinc-700 hover:bg-zinc-600 text-white"
+                    }`}
+                  >
+                    🖼 Wallet
+                  </button>
                   {isFriend(activeChat) ? (
                     <button
                       onClick={() => unfriend(activeChat)}
@@ -1152,6 +1306,96 @@ export default function Home() {
                   )}
                 </div>
               </div>
+
+              {/* Wallet Panel */}
+              {showNFTs && (
+                <div className="border border-zinc-800 rounded-xl p-3 mb-3 bg-zinc-900">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm font-semibold text-white">
+                      Wallet — {getDisplayName(activeChat)}
+                    </div>
+                    <button onClick={() => setShowNFTs(false)} className="text-zinc-500 hover:text-white text-xs">✕</button>
+                  </div>
+
+                  {/* Tabs */}
+                  <div className="flex gap-1 mb-3">
+                    <button
+                      onClick={() => setNftTab("nfts")}
+                      className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                        nftTab === "nfts" ? "bg-purple-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-white"
+                      }`}
+                    >
+                      🖼 NFT-uri {!loadingNFTs && `(${nfts.length})`}
+                    </button>
+                    <button
+                      onClick={() => setNftTab("tokens")}
+                      className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                        nftTab === "tokens" ? "bg-purple-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-white"
+                      }`}
+                    >
+                      💰 Tokene {!loadingOtherTokens && `(${otherTokens.length})`}
+                    </button>
+                  </div>
+
+                  {/* NFTs Tab */}
+                  {nftTab === "nfts" && (
+                    loadingNFTs ? (
+                      <div className="text-zinc-500 text-xs text-center py-4">Se încarcă NFT-urile...</div>
+                    ) : nfts.length === 0 ? (
+                      <div className="text-zinc-500 text-xs text-center py-4">Nu are NFT-uri</div>
+                    ) : (
+                      <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto">
+                        {nfts.map((nft) => (
+                          <div key={nft.id} className="group relative rounded-lg overflow-hidden bg-zinc-800 aspect-square">
+                            {nft.image && (
+                              <img
+                                src={nft.image}
+                                alt={nft.name}
+                                className="w-full h-full object-cover"
+                                onError={(e: any) => { e.target.style.display = "none"; }}
+                              />
+                            )}
+                            <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-1 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="text-white text-[8px] truncate">{nft.name}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+
+                  {/* Tokens Tab */}
+                  {nftTab === "tokens" && (
+                    loadingOtherTokens ? (
+                      <div className="text-zinc-500 text-xs text-center py-4">Se încarcă tokenele...</div>
+                    ) : otherTokens.length === 0 ? (
+                      <div className="text-zinc-500 text-xs text-center py-4">Nu are tokene</div>
+                    ) : (
+                      <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
+                        {otherTokens.map((token) => (
+                          <div key={token.mint} className="flex items-center gap-2 bg-zinc-800 rounded-lg px-2.5 py-2">
+                            {token.logo ? (
+                              <img src={token.logo} alt={token.symbol} className="w-6 h-6 rounded-full flex-shrink-0"
+                                onError={(e: any) => { e.target.style.display = "none"; }} />
+                            ) : (
+                              <div className="w-6 h-6 rounded-full bg-zinc-700 flex-shrink-0 flex items-center justify-center text-[9px] text-zinc-400">
+                                {token.symbol.slice(0, 2)}
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="text-white text-xs font-medium">{token.symbol}</div>
+                              <div className="text-zinc-500 text-[10px] truncate">{token.name}</div>
+                            </div>
+                            <div className="text-green-400 text-xs font-mono">
+                              {token.balance < 0.001 ? token.balance.toFixed(6) : token.balance.toFixed(3)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
 
               <div
                 ref={messagesContainerRef}
