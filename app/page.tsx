@@ -5,6 +5,8 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useEffect, useState, useRef } from "react";
 
 import { supabase } from "../lib/supabase";
+import { Connection, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from "@solana/web3.js";
+
 
 const WalletMultiButtonDynamic = dynamic(
   async () =>
@@ -56,7 +58,13 @@ function TypingIndicator() {
 }
 
 export default function Home() {
-  const { publicKey } = useWallet();
+  const { publicKey, sendTransaction } = useWallet();
+  const [showSendSol, setShowSendSol] = useState(false);
+  const [solAmount, setSolAmount] = useState("");
+  const [sendingSol, setSendingSol] = useState(false);
+  const [walletTokens, setWalletTokens] = useState<any[]>([]);
+  const [selectedToken, setSelectedToken] = useState<any>(null);
+  const [loadingTokens, setLoadingTokens] = useState(false);
 
   const [receiver, setReceiver] = useState("");
   const [message, setMessage] = useState("");
@@ -81,11 +89,17 @@ export default function Home() {
   const [otherIsTyping, setOtherIsTyping] = useState(false);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const myTypingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seenPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const activeChatRef = useRef(activeChat);
   useEffect(() => {
     activeChatRef.current = activeChat;
   }, [activeChat]);
+
+  const chatMessagesRef = useRef(chatMessages);
+  useEffect(() => {
+    chatMessagesRef.current = chatMessages;
+  }, [chatMessages]);
 
   // Cand publicKey devine disponibil dupa refresh, reincarca conversatia activa
   useEffect(() => {
@@ -143,6 +157,40 @@ export default function Home() {
     setOnlineUsers(new Set(data?.map((r: any) => r.wallet) || []));
   }
 
+  async function pollLastMessageSeen() {
+    if (!publicKey || !activeChatRef.current) return;
+    // gasim ultimul mesaj trimis de noi - folosim ref ca sa avem valoarea curenta
+    const lastMine = [...chatMessagesRef.current].reverse().find(
+      (m: any) => m.sender === publicKey.toBase58() && !m.seen
+    );
+    if (!lastMine) {
+      // toate vazute, oprim polling
+      if (seenPollingRef.current) {
+        clearInterval(seenPollingRef.current);
+        seenPollingRef.current = null;
+      }
+      return;
+    }
+    const { data } = await supabase
+      .from("messages")
+      .select("id, seen")
+      .eq("id", lastMine.id)
+      .single();
+    if (data?.seen) {
+      setChatMessages((prev) =>
+        prev.map((m: any) =>
+          m.sender === publicKey.toBase58() && m.receiver === activeChatRef.current
+            ? { ...m, seen: true }
+            : m
+        )
+      );
+      if (seenPollingRef.current) {
+        clearInterval(seenPollingRef.current);
+        seenPollingRef.current = null;
+      }
+    }
+  }
+
   async function sendTyping(isTyping: boolean) {
     if (!publicKey || !activeChatRef.current) return;
     if (isTyping) {
@@ -174,6 +222,14 @@ export default function Home() {
   useEffect(() => {
     if (chatMessages.length > 0) {
       scrollToBottom("smooth");
+    }
+    // daca avem mesaje neseen trimise de noi, pornim polling
+    if (!publicKey) return;
+    const hasUnseenSent = chatMessages.some(
+      (m: any) => m.sender === publicKey.toBase58() && !m.seen
+    );
+    if (hasUnseenSent && !seenPollingRef.current) {
+      seenPollingRef.current = setInterval(pollLastMessageSeen, 2000);
     }
   }, [chatMessages]);
 
@@ -409,6 +465,159 @@ export default function Home() {
     }
   }
 
+  async function markMessagesAsSeen(wallet: string) {
+    if (!publicKey) return;
+    // delay mic ca sa nu interfere cu setChatMessages
+    setTimeout(async () => {
+      await supabase
+        .from("messages")
+        .update({ seen: true })
+        .eq("sender", wallet)
+        .eq("receiver", publicKey.toBase58())
+        .eq("seen", false);
+    }, 300);
+  }
+
+  async function fetchWalletTokens() {
+    if (!publicKey) return;
+    setLoadingTokens(true);
+    try {
+      const HELIUS_KEY = "79a1d2c9-8ab4-4fe1-8ca4-7b49961960fb";
+
+      // Fetch SOL balance
+      const connection = new Connection(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`, "confirmed");
+      const lamports = await connection.getBalance(publicKey);
+      const solBalance = lamports / LAMPORTS_PER_SOL;
+
+      // Fetch SPL tokens via Helius API
+      const res = await fetch(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getAssetsByOwner",
+          params: {
+            ownerAddress: publicKey.toBase58(),
+            page: 1,
+            limit: 50,
+            displayOptions: { showFungible: true, showNativeBalance: true },
+          },
+        }),
+      });
+
+      const json = await res.json();
+      const items = json?.result?.items || [];
+
+      // filter only fungible tokens with balance > 0
+      const tokens = items
+        .filter((item: any) =>
+          item.interface === "FungibleToken" &&
+          item.token_info?.balance > 0
+        )
+        .map((item: any) => ({
+          mint: item.id,
+          symbol: item.token_info?.symbol || item.content?.metadata?.symbol || "???",
+          name: item.content?.metadata?.name || item.token_info?.symbol || "Unknown",
+          balance: item.token_info?.balance / Math.pow(10, item.token_info?.decimals || 0),
+          decimals: item.token_info?.decimals || 0,
+          logo: item.content?.links?.image || null,
+          isSol: false,
+        }));
+
+      // SOL first
+      const solToken = {
+        mint: "SOL",
+        symbol: "SOL",
+        name: "Solana",
+        balance: solBalance,
+        decimals: 9,
+        logo: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
+        isSol: true,
+      };
+
+      setWalletTokens([solToken, ...tokens]);
+      setSelectedToken(solToken);
+    } catch (err) {
+      console.error(err);
+      // fallback to SOL only
+      const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
+      const lamports = await connection.getBalance(publicKey);
+      const solToken = {
+        mint: "SOL", symbol: "SOL", name: "Solana",
+        balance: lamports / LAMPORTS_PER_SOL,
+        decimals: 9, isSol: true,
+        logo: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
+      };
+      setWalletTokens([solToken]);
+      setSelectedToken(solToken);
+    } finally {
+      setLoadingTokens(false);
+    }
+  }
+
+  async function sendSol() {
+    if (!publicKey || !activeChat || !solAmount || !selectedToken) return;
+    const amount = parseFloat(solAmount);
+    if (isNaN(amount) || amount <= 0) {
+      alert("Suma invalida");
+      return;
+    }
+    if (amount > selectedToken.balance) {
+      alert(`Balance insuficient. Ai ${selectedToken.balance.toFixed(4)} ${selectedToken.symbol}`);
+      return;
+    }
+
+    setSendingSol(true);
+    try {
+      const HELIUS_KEY = "79a1d2c9-8ab4-4fe1-8ca4-7b49961960fb";
+      const connection = new Connection(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`, "confirmed");
+      const toPublicKey = new PublicKey(activeChat);
+      const transaction = new Transaction();
+
+      if (selectedToken.isSol) {
+        const lamports = Math.round(amount * LAMPORTS_PER_SOL);
+        transaction.add(SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey: toPublicKey,
+          lamports,
+        }));
+      } else {
+        // SPL Token transfer
+        const { createTransferInstruction, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } =
+          await import("@solana/spl-token");
+        const mintPubkey = new PublicKey(selectedToken.mint);
+        const fromAta = await getOrCreateAssociatedTokenAccount(connection, { publicKey, signTransaction: async (tx: any) => tx } as any, mintPubkey, publicKey);
+        const toAta = await getOrCreateAssociatedTokenAccount(connection, { publicKey, signTransaction: async (tx: any) => tx } as any, mintPubkey, toPublicKey);
+        const transferAmount = Math.round(amount * Math.pow(10, selectedToken.decimals));
+        transaction.add(createTransferInstruction(fromAta.address, toAta.address, publicKey, transferAmount, [], TOKEN_PROGRAM_ID));
+      }
+
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = publicKey;
+
+      const signature = await sendTransaction(transaction, connection);
+      await connection.confirmTransaction(signature, "confirmed");
+
+      await supabase.from("messages").insert([{
+        sender: publicKey.toBase58(),
+        receiver: activeChat,
+        content: `💸 Am trimis ${amount} ${selectedToken.symbol}`,
+        seen: false,
+      }]);
+
+      setSolAmount("");
+      setShowSendSol(false);
+      alert(`✅ ${amount} ${selectedToken.symbol} trimis cu succes!`);
+    } catch (err: any) {
+      console.error(err);
+      alert("Eroare: " + (err.message || "Tranzactie esuata"));
+    } finally {
+      setSendingSol(false);
+    }
+  }
+
   async function sendMessage() {
     if (!publicKey) {
       alert("Connect wallet first");
@@ -434,6 +643,7 @@ export default function Home() {
       sender: publicKey.toBase58(),
       receiver: activeChat,
       content: message,
+      seen: false,
     };
 
     const { error } = await supabase
@@ -510,6 +720,9 @@ export default function Home() {
     const msgs = (data || []).reverse();
     setChatMessages(msgs);
     setHasMoreMessages(msgs.length === 50);
+
+    // marcam mesajele ca vazute
+    await markMessagesAsSeen(wallet);
 
     // scroll after messages load
     setTimeout(() => {
@@ -601,6 +814,11 @@ export default function Home() {
               }));
             }
 
+            // daca chat-ul e deschis cu acest sender, marcam ca vazut
+            if (newMessage.sender === activeChatRef.current) {
+              supabase.from("messages").update({ seen: true }).eq("id", newMessage.id);
+            }
+
             setInboxMessages((prev) => {
               if (newMessage.sender !== activeChatRef.current) {
                 setUnreadCounts((prevCounts: any) => ({
@@ -631,6 +849,19 @@ export default function Home() {
               if (prev.find((m) => m.id === newMessage.id)) return prev;
               return [...prev, newMessage];
             });
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "messages" },
+        (payload) => {
+          const updated = payload.new as any;
+          // actualizam DOAR seen, nu inlocuim mesajul complet
+          if (updated.seen === true) {
+            setChatMessages((prev) =>
+              prev.map((m) => m.id === updated.id ? { ...m, seen: true } : m)
+            );
           }
         }
       )
@@ -675,6 +906,7 @@ export default function Home() {
       supabase.removeChannel(channel);
       clearInterval(presenceInterval);
       clearInterval(onlineInterval);
+      if (seenPollingRef.current) clearInterval(seenPollingRef.current);
       sendTyping(false);
     };
   }, [publicKey]);
@@ -965,10 +1197,17 @@ export default function Home() {
                           {msg.content}
                         </div>
                         {msg.created_at && (
-                          <div className="text-[10px] text-zinc-600 px-1">
-                            {new Date(msg.created_at).toLocaleTimeString("ro-RO", {
-                              hour: "2-digit", minute: "2-digit"
-                            })}
+                          <div className={`flex items-center gap-1 px-1 ${isMine ? "flex-row-reverse" : ""}`}>
+                            <div className="text-[10px] text-zinc-600">
+                              {new Date(msg.created_at).toLocaleTimeString("ro-RO", {
+                                hour: "2-digit", minute: "2-digit"
+                              })}
+                            </div>
+                            {isMine && i === chatMessages.length - 1 && (
+                              <div className={`text-[10px] font-bold ${msg.seen ? "text-green-400" : "text-zinc-600"}`}>
+                                {msg.seen ? "✓✓" : "✓"}
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -996,22 +1235,97 @@ export default function Home() {
                     You have blocked this user. Unblock to send messages.
                   </div>
                 ) : (
-                  <div className="flex gap-3">
-                    <input
-                      value={message}
-                      onChange={(e) => handleMessageInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") sendMessage();
-                      }}
-                      placeholder="Type message..."
-                      className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg p-3"
-                    />
-                    <button
-                      onClick={sendMessage}
-                      className="bg-white text-black rounded-lg px-6 font-bold"
-                    >
-                      Send
-                    </button>
+                  <div className="flex flex-col gap-2">
+                    {showSendSol && (
+                      <div className="bg-zinc-900 border border-yellow-600 rounded-xl p-3 flex flex-col gap-3">
+                        {loadingTokens ? (
+                          <div className="text-zinc-400 text-sm text-center py-2">Se încarcă tokenele...</div>
+                        ) : (
+                          <>
+                            {/* Token selector */}
+                            <div className="flex flex-wrap gap-2">
+                              {walletTokens.map((token) => (
+                                <button
+                                  key={token.mint}
+                                  onClick={() => setSelectedToken(token)}
+                                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                                    selectedToken?.mint === token.mint
+                                      ? "bg-yellow-500 text-black"
+                                      : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                                  }`}
+                                >
+                                  {token.logo && (
+                                    <img src={token.logo} alt={token.symbol} className="w-4 h-4 rounded-full" onError={(e: any) => e.target.style.display = "none"} />
+                                  )}
+                                  <span>{token.symbol}</span>
+                                  <span className="text-[10px] opacity-70">{token.balance.toFixed(3)}</span>
+                                </button>
+                              ))}
+                            </div>
+                            {/* Amount input */}
+                            <div className="flex gap-2 items-center">
+                              <input
+                                value={solAmount}
+                                onChange={(e) => setSolAmount(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") sendSol(); }}
+                                placeholder={`Suma ${selectedToken?.symbol || "SOL"}`}
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                className="flex-1 bg-zinc-800 border border-zinc-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-500"
+                              />
+                              {selectedToken && (
+                                <span className="text-zinc-500 text-xs whitespace-nowrap">
+                                  max: {selectedToken.balance.toFixed(4)}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={sendSol}
+                                disabled={sendingSol || !selectedToken || !solAmount}
+                                className="flex-1 bg-yellow-500 hover:bg-yellow-400 text-black py-2 rounded-lg text-sm font-bold disabled:opacity-50 transition-colors"
+                              >
+                                {sendingSol ? "Se trimite..." : `Trimite ${selectedToken?.symbol || "SOL"}`}
+                              </button>
+                              <button
+                                onClick={() => { setShowSendSol(false); setSolAmount(""); }}
+                                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white px-3 py-2 rounded-lg text-sm transition-colors"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          if (!showSendSol) fetchWalletTokens();
+                          setShowSendSol(!showSendSol);
+                        }}
+                        className="bg-yellow-500 hover:bg-yellow-400 text-black rounded-lg px-3 font-bold text-sm transition-colors"
+                        title="Trimite crypto"
+                      >
+                        ◎
+                      </button>
+                      <input
+                        value={message}
+                        onChange={(e) => handleMessageInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") sendMessage();
+                        }}
+                        placeholder="Type message..."
+                        className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg p-3"
+                      />
+                      <button
+                        onClick={sendMessage}
+                        className="bg-white text-black rounded-lg px-6 font-bold"
+                      >
+                        Send
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
