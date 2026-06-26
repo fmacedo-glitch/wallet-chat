@@ -143,6 +143,10 @@ const [showStatusPicker, setShowStatusPicker] = useState(false);
 const [searchQuery, setSearchQuery] = useState("");
 const [showSearch, setShowSearch] = useState(false);
 
+// Context menu + reply
+const [contextMenu, setContextMenu] = useState<{ msgId: string; x: number; y: number } | null>(null);
+const [replyTo, setReplyTo] = useState<any>(null);
+
 // Mobile
 const [showSidebar, setShowSidebar] = useState(false);
 
@@ -278,6 +282,11 @@ const [showSidebar, setShowSidebar] = useState(false);
     setSelectedMsgs(new Set());
     setSelectionMode(false);
   }
+
+  function copyMessage(content: string) {
+  navigator.clipboard.writeText(content);
+  setContextMenu(null);
+}
 
   async function deleteSelected(mode: "me" | "all") {
     if (!publicKey) return;
@@ -680,12 +689,20 @@ function getStatusEmoji(status: string) {
     if (isBlocked(activeChat)) { alert("You have blocked this user."); return; }
     if (isBlockedByThem(activeChat)) { alert("You cannot send messages to this user."); return; }
     const { error } = await supabase.from("messages").insert([{
-      sender: publicKey.toBase58(), receiver: activeChat, content: message.trim(), seen: false,
-    }]);
+  sender: publicKey.toBase58(),
+  receiver: activeChat,
+  content: message.trim(),
+  seen: false,
+  reply_to: replyTo?.id || null,
+  reply_content: replyTo?.content || null,
+  reply_sender: replyTo?.sender || null,
+}]);
     if (error) { alert(JSON.stringify(error)); return; }
     sendTyping(false);
     if (myTypingTimeoutRef.current) clearTimeout(myTypingTimeoutRef.current);
     setMessage("");
+    setReplyTo(null);
+
     if (textareaRef.current) { textareaRef.current.style.height = "auto"; }
   }
 
@@ -707,8 +724,9 @@ function getStatusEmoji(status: string) {
   async function loadConversation(wallet: string) {
     if (!wallet) return;
     if (!publicKey) { setActiveChat(wallet); return; }
-    setActiveChat(wallet);
-    setUnreadCounts((prev: any) => ({ ...prev, [wallet]: 0 }));
+   setActiveChat(wallet);
+setUnreadCounts((prev: any) => ({ ...prev, [wallet]: 0 }));
+setShowSidebar(false);
     const { data, error } = await supabase.from("messages").select("*")
       .or(`and(sender.eq.${publicKey.toBase58()},receiver.eq.${wallet}),and(sender.eq.${wallet},receiver.eq.${publicKey.toBase58()})`)
       .order("created_at", { ascending: false }).limit(50);
@@ -821,7 +839,18 @@ function getStatusEmoji(status: string) {
 
       .on("postgres_changes", { event: "*", schema: "public", table: "blocked_users" }, () => { fetchBlockedUsers(); fetchBlockedByUsers(); })
       .on("postgres_changes", { event: "*", schema: "public", table: "friends" }, () => { fetchFriends(); fetchFriendRequests(); })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "profiles" }, (payload) => {
+  const updated = payload.new as any;
+  if (updated?.wallet) {
+    setProfiles((prev: any) => ({
+      ...prev,
+      [updated.wallet]: { ...prev[updated.wallet], ...updated },
+    }));
+  }
+})
       .subscribe();
+
+      
 
     return () => {
       supabase.removeChannel(channel);
@@ -1049,7 +1078,17 @@ function getStatusEmoji(status: string) {
                   <div>
                     <div className="text-white font-semibold">{getDisplayName(activeChat)}</div>
                     <div className="text-xs text-zinc-500">
-                      {otherIsTyping ? <span className="text-green-400 animate-pulse">typing...</span> : isOnline(activeChat) ? "Online" : "Offline"}
+                      {otherIsTyping ? (
+  <span className="text-green-400 animate-pulse">typing...</span>
+) : profiles[activeChat]?.status === "busy" ? (
+  <span className="text-red-400">🔴 Busy{profiles[activeChat]?.status_text ? ` — ${profiles[activeChat].status_text}` : ""}</span>
+) : profiles[activeChat]?.status === "away" ? (
+  <span className="text-yellow-400">🟡 Away{profiles[activeChat]?.status_text ? ` — ${profiles[activeChat].status_text}` : ""}</span>
+) : profiles[activeChat]?.status === "offline" ? (
+  <span className="text-zinc-500">⚫ Offline</span>
+) : isOnline(activeChat) ? (
+  <span className="text-green-400">🟢 Online{profiles[activeChat]?.status_text ? ` — ${profiles[activeChat].status_text}` : ""}</span>
+) : "Offline"}
                     </div>
                     <div className="text-[10px] text-zinc-700 break-all">{activeChat}</div>
                   </div>
@@ -1182,17 +1221,21 @@ function getStatusEmoji(status: string) {
                         </div>
                       )}
                       <div
-                        id={`msg-${msg.id}`}
-                        className={`flex items-end gap-2 group cursor-pointer rounded-lg px-1 py-0.5 transition-colors ${
-                          isSelected ? "bg-zinc-800/60" : "hover:bg-zinc-900/40"
-                        } ${isMine ? "flex-row-reverse" : "flex-row"}`}
-                        onClick={() => {
-                          if (!msg.deleted_for_all) {
-                            setSelectionMode(true);
-                            toggleSelectMsg(msg.id);
-                          }
-                        }}
-                      >
+  id={`msg-${msg.id}`}
+  className={`flex items-end gap-2 group rounded-lg px-1 py-0.5 transition-colors ${
+    isSelected ? "bg-zinc-800/60" : "hover:bg-zinc-900/40"
+  } ${isMine ? "flex-row-reverse" : "flex-row"}`}
+  onClick={(e) => {
+    if (msg.deleted_for_all) return;
+    if (selectionMode) { toggleSelectMsg(msg.id); return; }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setContextMenu(contextMenu?.msgId === msg.id ? null : {
+      msgId: msg.id,
+      x: e.clientX,
+      y: rect.top,
+    });
+  }}
+>
                         {/* Checkbox */}
                         {selectionMode && !msg.deleted_for_all && (
                           <div className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${
@@ -1202,18 +1245,24 @@ function getStatusEmoji(status: string) {
                           </div>
                         )}
 
-                        <div className={`flex flex-col gap-0.5 max-w-[70%] min-w-0 ${isMine ? "items-end" : "items-start"}`}>
+                        <div className={`flex flex-col gap-0.5 min-w-0 w-full max-w-[70%] ${isMine ? "items-end" : "items-start"}`}>
                           {msg.deleted_for_all ? (
-                            <div className="px-3 py-2 rounded-xl bg-zinc-800/50 border border-zinc-700 text-zinc-500 text-xs italic">🚫 Message deleted</div>
-                          ) : (
-                            <div className={`px-3 py-2 rounded-2xl whitespace-pre-wrap break-words overflow-hidden text-sm ${
-                              isSelected
-                                ? isMine ? "bg-green-700" : "bg-zinc-700"
-                                : isMine ? "bg-green-600 rounded-br-sm" : "bg-zinc-800 rounded-bl-sm"
-                            }`}>
-                              {msg.content}
-                            </div>
-                          )}
+  <div className="px-3 py-2 rounded-xl bg-zinc-800/50 border border-zinc-700 text-zinc-500 text-xs italic">🚫 Message deleted</div>
+) : (
+  <div className={`px-3 py-2 rounded-2xl break-words text-sm max-w-full overflow-hidden ${
+    isSelected
+      ? isMine ? "bg-green-700" : "bg-zinc-700"
+      : isMine ? "bg-green-600 rounded-br-sm" : "bg-zinc-800 rounded-bl-sm"
+  }`}>
+    {msg.reply_content && (
+      <div className={`mb-2 px-2 py-1 rounded-lg text-xs border-l-2 ${isMine ? "border-green-300 bg-green-700/50" : "border-zinc-500 bg-zinc-700/50"}`}>
+        <div className="text-zinc-400 mb-0.5">{msg.reply_sender === publicKey?.toBase58() ? "You" : getDisplayName(msg.reply_sender)}</div>
+        <div className="truncate opacity-80">{msg.reply_content}</div>
+      </div>
+    )}
+    {msg.content}
+  </div>
+)}
 
                           {/* Reactions */}
                           {Object.keys(msgReactions).length > 0 && (
@@ -1243,30 +1292,62 @@ function getStatusEmoji(status: string) {
                           )}
                         </div>
 
-                        {/* Reaction button on hover */}
-                        {!msg.deleted_for_all && !selectionMode && (
-                          <div className="opacity-0 group-hover:opacity-100 transition-opacity relative" onClick={(e) => e.stopPropagation()}>
-                            <button onClick={() => setShowReactionPicker(showReactionPicker === msg.id ? null : msg.id)}
-                              className="text-sm hover:bg-zinc-700 rounded p-1 transition-colors" title="React">
-                              😊
-                            </button>
-                            {showReactionPicker === msg.id && (
-                              <div className={`absolute bottom-full mb-1 bg-zinc-900 border border-zinc-700 rounded-xl p-2 shadow-xl z-50 flex gap-1 flex-wrap w-48 ${isMine ? "right-0" : "left-0"}`}>
-                                {["❤️","😂","😮","😢","😡","👍","👎","🔥","🎉","💯"].map((e) => (
-                                  <button key={e} onClick={() => toggleReaction(msg.id, e)}
-                                    className="text-lg hover:bg-zinc-800 rounded p-0.5 transition-colors">
-                                    {e}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
+                        
                       </div>
                     </div>
                   );
                 })}
               </div>
+
+{/* Context menu */}
+{contextMenu && (() => {
+  const msg = chatMessages.find((m: any) => m.id === contextMenu.msgId);
+  if (!msg) return null;
+  const isMine = msg.sender === publicKey?.toBase58();
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={() => setContextMenu(null)} />
+      <div className="fixed z-50 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl p-1 min-w-[180px]"
+        style={{ top: Math.min(contextMenu.y - 10, window.innerHeight - 280), left: Math.min(contextMenu.x, window.innerWidth - 200) }}>
+        <button onClick={() => { setReplyTo(msg); setContextMenu(null); }}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-white transition-colors">
+          ↩️ <span>Reply</span>
+        </button>
+        <button onClick={() => copyMessage(msg.content)}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-white transition-colors">
+          📋 <span>Copy</span>
+        </button>
+        <div className="px-3 py-1.5">
+          <div className="flex flex-wrap gap-1">
+            {["❤️","😂","😮","😢","👍","👎","🔥","🎉"].map((e) => (
+              <button key={e} onClick={() => { toggleReaction(msg.id, e); setContextMenu(null); }}
+                className="text-lg hover:bg-zinc-800 rounded p-0.5 transition-colors">
+                {e}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="h-px bg-zinc-800 mx-2 my-1" />
+        <button onClick={() => { setContextMenu(null); setSelectionMode(true); toggleSelectMsg(msg.id); }}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400 transition-colors">
+          🗑 <span>Delete</span>
+        </button>
+      </div>
+    </>
+  );
+})()}
+
+{/* Reply bar */}
+{replyTo && (
+  <div className="flex items-center gap-2 bg-zinc-800 border-l-2 border-green-500 rounded-lg px-3 py-2 mt-2">
+    <div className="flex-1 min-w-0">
+      <div className="text-green-400 text-xs mb-0.5">{replyTo.sender === publicKey?.toBase58() ? "You" : getDisplayName(replyTo.sender)}</div>
+      <div className="text-zinc-400 text-xs truncate">{replyTo.content}</div>
+    </div>
+    <button onClick={() => setReplyTo(null)} className="text-zinc-500 hover:text-white flex-shrink-0">✕</button>
+  </div>
+)}
+
 
               {/* Selection toolbar */}
               {selectionMode && (

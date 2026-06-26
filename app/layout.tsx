@@ -17,15 +17,9 @@ export const metadata: Metadata = {
   title: "Wallet Chat",
   description: "Chat with Solana wallets",
   manifest: "/manifest.json",
-  themeColor: "#000000",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "black",
-  },
-  viewport: {
-    width: "device-width",
-    initialScale: 1,
-    maximumScale: 1,
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg",
   },
 };
 
@@ -35,15 +29,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-       <body className="min-h-full flex flex-col">
-        <Providers>
-          {children}
-        </Providers>
-      </body>
-    </html>
+   <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+  <head>
+    <link rel="icon" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+  </head>
+  <body className="min-h-full flex flex-col">
+    <Providers>
+      {children}
+    </Providers>
+  </body>
+</html>
   );
 }
