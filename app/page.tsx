@@ -321,17 +321,21 @@ const [showSidebar, setShowSidebar] = useState(false);
   }
 
   async function toggleReaction(msgId: string, emoji: string) {
-    if (!publicKey) return;
-    const me = publicKey.toBase58();
-    const existing = reactions[msgId]?.[emoji]?.includes(me);
-    if (existing) {
-      await supabase.from("reactions").delete().eq("message_id", msgId).eq("wallet", me).eq("emoji", emoji);
-    } else {
-      await supabase.from("reactions").upsert({ message_id: msgId, wallet: me, emoji });
-    }
-    fetchReactions([msgId]);
-    setShowReactionPicker(null);
+  if (!publicKey) return;
+  const me = publicKey.toBase58();
+  const existing = reactions[msgId]?.[emoji]?.includes(me);
+
+  // sterge ORICE reactie existenta a userului pe acest mesaj
+  await supabase.from("reactions").delete().eq("message_id", msgId).eq("wallet", me);
+
+  // daca a apasat pe acelasi emoji = toggle off, altfel adauga noul emoji
+  if (!existing) {
+    await supabase.from("reactions").insert({ message_id: msgId, wallet: me, emoji });
   }
+
+  fetchReactions([msgId]);
+  setContextMenu(null);
+}
 
   // ── Notifications ──────────────────────────────────────────────────────────
 async function fetchNotifications() {
@@ -1484,7 +1488,7 @@ setShowSidebar(false);
                             sendMessage();
                           }
                         }}
-                        placeholder="Type message... (Shift+Enter for new line)"
+                        placeholder="Type message... "
                         rows={1}
                         className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm resize-none overflow-hidden focus:outline-none focus:border-zinc-500"
                         style={{ minHeight: "42px", maxHeight: "120px" }}
