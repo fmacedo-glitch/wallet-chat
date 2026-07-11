@@ -49,7 +49,7 @@ export default function AdminDashboard() {
   const [lookupLoading, setLookupLoading] = useState(false);
 
   // Active tab
-  const [tab, setTab] = useState<"overview" | "gates" | "settings" | "users" | "messages" | "notifications">("overview");
+  const [tab, setTab] = useState<"overview" | "gates" | "settings" | "users" | "messages" | "notifications" | "premium">("overview");
 
   // Users
   const [users, setUsers] = useState<any[]>([]);
@@ -60,6 +60,12 @@ export default function AdminDashboard() {
   const [convMessages, setConvMessages] = useState<any[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [msgSearch, setMsgSearch] = useState("");
+
+  // Premium
+  const [premiumUsers, setPremiumUsers] = useState<any[]>([]);
+  const [premiumWallet, setPremiumWallet] = useState("");
+  const [premiumMonths, setPremiumMonths] = useState(1);
+  const [grantingPremium, setGrantingPremium] = useState(false);
 
   // Notifications broadcast
 const [notifTitle, setNotifTitle] = useState("");
@@ -75,6 +81,7 @@ const [notifHistory, setNotifHistory] = useState<any[]>([]);
     fetchUsers();
     fetchConversations();
     fetchNotifHistory();
+    fetchPremiumUsers();
   }, [publicKey]);
 
   async function checkAdmin() {
@@ -236,7 +243,36 @@ const [notifHistory, setNotifHistory] = useState<any[]>([]);
     setConversations(Array.from(convMap.values()));
   }
 
-async function fetchNotifHistory() {
+async function fetchPremiumUsers() {
+    const { data } = await supabase.from("profiles")
+      .select("wallet, username, display_name, is_premium, premium_expires_at")
+      .eq("is_premium", true)
+      .order("premium_expires_at", { ascending: false });
+    setPremiumUsers(data || []);
+  }
+
+  async function grantPremium(wallet: string, months: number) {
+    if (!wallet.trim()) { alert("Enter a wallet address"); return; }
+    setGrantingPremium(true);
+    const expires = new Date();
+    expires.setMonth(expires.getMonth() + months);
+    const { error } = await supabase.from("profiles").upsert({
+      wallet: wallet.trim(),
+      is_premium: true,
+      premium_expires_at: expires.toISOString(),
+    });
+    if (error) { alert("Error: " + error.message); }
+    else { alert(`✅ Premium granted until ${expires.toLocaleDateString()}!`); setPremiumWallet(""); fetchPremiumUsers(); }
+    setGrantingPremium(false);
+  }
+
+  async function revokePremium(wallet: string) {
+    if (!confirm(`Revoke premium for ${wallet.slice(0,8)}...?`)) return;
+    await supabase.from("profiles").update({ is_premium: false, premium_expires_at: null }).eq("wallet", wallet);
+    fetchPremiumUsers();
+  }
+
+  async function fetchNotifHistory() {
   const { data } = await supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(10);
   setNotifHistory(data || []);
 }
@@ -328,10 +364,11 @@ async function sendBroadcast() {
           {[
             { key: "overview", icon: "📊", label: "Overview" },
             { key: "gates", icon: "🔐", label: "Token Gates" },
-            { key: "users", icon: "👥", label: "Utilizatori" },
-           { key: "messages", icon: "💬", label: "Mesaje" },
-{ key: "notifications", icon: "📢", label: "Notifications" },
-{ key: "settings", icon: "⚙️", label: "Setări" },
+            { key: "users", icon: "👥", label: "Users" },
+            { key: "premium", icon: "⭐", label: "Premium" },
+            { key: "messages", icon: "💬", label: "Messages" },
+            { key: "notifications", icon: "📢", label: "Notifications" },
+            { key: "settings", icon: "⚙️", label: "Settings" },
           ].map((item) => (
             <button
               key={item.key}
@@ -705,6 +742,70 @@ async function sendBroadcast() {
                     Selectează o conversație
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* PREMIUM */}
+          {tab === "premium" && (
+            <div className="flex flex-col gap-6 max-w-2xl">
+              <div className="text-lg font-bold">Premium Management</div>
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 flex flex-col gap-4">
+                <div className="font-semibold text-sm text-zinc-400 uppercase tracking-wide">Grant Premium</div>
+                <div>
+                  <div className="text-xs text-zinc-500 mb-1">Wallet Address</div>
+                  <input value={premiumWallet} onChange={(e) => setPremiumWallet(e.target.value)}
+                    placeholder="Wallet address..."
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 mb-1">Duration</div>
+                  <select value={premiumMonths} onChange={(e) => setPremiumMonths(Number(e.target.value))}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm">
+                    <option value={1}>1 month</option>
+                    <option value={3}>3 months</option>
+                    <option value={6}>6 months</option>
+                    <option value={12}>12 months</option>
+                    <option value={120}>Lifetime (10 years)</option>
+                  </select>
+                </div>
+                <button onClick={() => grantPremium(premiumWallet, premiumMonths)}
+                  disabled={grantingPremium || !premiumWallet.trim()}
+                  className="bg-green-600 hover:bg-green-500 text-white px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 transition-colors">
+                  {grantingPremium ? "Granting..." : "⭐ Grant Premium"}
+                </button>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="font-semibold text-sm">Active Premium Users ({premiumUsers.length})</div>
+                  <button onClick={fetchPremiumUsers} className="text-zinc-500 hover:text-white text-xs">↻ Refresh</button>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {premiumUsers.length === 0 && <div className="text-zinc-500 text-sm">No premium users yet</div>}
+                  {premiumUsers.map((u: any) => (
+                    <div key={u.wallet} className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-500 to-green-400 flex items-center justify-center text-white font-bold flex-shrink-0">
+                        {(u.display_name || u.username || u.wallet).slice(0, 1).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-white text-sm font-medium flex items-center gap-1">
+                          {u.display_name || (u.username ? `@${u.username}` : u.wallet.slice(0, 8) + "...")}
+                          <span className="text-green-400 text-xs">✅</span>
+                        </div>
+                        <div className="text-zinc-500 text-xs font-mono truncate">{u.wallet}</div>
+                        {u.premium_expires_at && (
+                          <div className="text-zinc-600 text-xs mt-0.5">
+                            Expires: {new Date(u.premium_expires_at).toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}
+                          </div>
+                        )}
+                      </div>
+                      <button onClick={() => revokePremium(u.wallet)}
+                        className="text-red-600 hover:text-red-400 text-xs transition-colors flex-shrink-0">
+                        Revoke
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}

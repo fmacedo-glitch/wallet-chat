@@ -18,6 +18,7 @@ export function ChatWindow({
   selectedToken, setSelectedToken, solAmount, setSolAmount, sendSol, sendingSol, fetchWalletTokens,
   message, handleMessageInput, textareaRef, showEmojiPicker, setShowEmojiPicker,
   replyTo, setReplyTo, autoResize, setMessage, sendMessage,
+  handleViewProfile, getUserBadge, isPremium,
 }: any) {
   // Internal scroll ref
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -47,18 +48,18 @@ export function ChatWindow({
             <Avatar wallet={activeChat} profile={profiles[activeChat]} size={38} />
             <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-black ${isOnline(activeChat) ? "bg-green-400" : "bg-zinc-600"}`} />
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-white font-semibold text-sm">{getDisplayName(activeChat)}</div>
+          <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleViewProfile(activeChat)}>
+            <div className="text-white font-semibold text-sm flex items-center gap-1">
+              {getDisplayName(activeChat)}
+              {profiles[activeChat]?.is_premium && <span className="text-green-400 text-xs">✅</span>}
+            </div>
             <div className="text-xs text-zinc-500">
               {otherIsTyping ? <span className="text-green-400 animate-pulse">typing...</span>
-                : profiles[activeChat]?.status === "busy" ? <span className="text-red-400">🔴 Busy</span>
-                : profiles[activeChat]?.status === "away" ? <span className="text-yellow-400">🟡 Away</span>
-                : isOnline(activeChat) ? <span className="text-green-400">🟢 Online</span>
-                : "Offline"}
+                : isOnline(activeChat) ? <span className="text-green-400">● Online</span>
+                : <span className="text-zinc-600">● Offline</span>}
             </div>
           </div>
           <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); }} className="text-zinc-400 hover:text-white p-1.5">🔍</button>
-          <button onClick={() => { if (!showNFTs || nftWallet !== activeChat) { fetchNFTs(activeChat); fetchOtherWalletTokens(activeChat); } setShowNFTs(!showNFTs); setNftTab("nfts"); }} className="text-zinc-400 hover:text-white p-1.5">🖼</button>
         </div>
         {showSearch && (
           <div className="mt-2">
@@ -77,21 +78,10 @@ export function ChatWindow({
             )}
           </div>
         )}
-        <div className="flex gap-2 mt-2 flex-wrap">
-          {isFriend(activeChat) ? (
-            <button onClick={() => unfriend(activeChat)} className="bg-zinc-800 text-zinc-300 px-3 py-1 rounded-lg text-xs transition-colors">Unfriend</button>
-          ) : friendRequests?.some((r: any) => r.sender === publicKey?.toBase58() && r.receiver === activeChat && r.accepted === false) ? (
-            <button disabled className="bg-yellow-600/70 text-white px-3 py-1 rounded-lg text-xs cursor-not-allowed opacity-80">⏳ Request Sent</button>
-          ) : friendRequests?.some((r: any) => r.receiver === publicKey?.toBase58() && r.sender === activeChat && r.accepted === false) ? (
-            <button disabled className="bg-blue-600/70 text-white px-3 py-1 rounded-lg text-xs cursor-not-allowed opacity-80">📨 Wants to be friends</button>
-          ) : (
-            <button onClick={() => addFriend(activeChat)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded-lg text-xs transition-colors">Add Friend</button>
-          )}
-          {!isBlocked(activeChat) ? (
-            <button onClick={() => blockUser(activeChat)} className="bg-red-800 text-white px-3 py-1 rounded-lg text-xs transition-colors">Block</button>
-          ) : (
-            <button onClick={() => unblockUser(activeChat)} className="bg-zinc-700 text-white px-3 py-1 rounded-lg text-xs transition-colors">Unblock</button>
-          )}
+        <div className="flex items-center gap-2 mt-1">
+          <div className="text-[10px] text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors" onClick={() => handleViewProfile(activeChat)}>
+            View profile →
+          </div>
         </div>
       </div>
       {showNFTs && (

@@ -2,7 +2,7 @@ import { Avatar } from "./Avatar";
 
 export function TabFriends({
   friendRequests, publicKey, profiles, getDisplayName, acceptFriend, rejectFriend,
-  receiver, setReceiver, addFriend, friends, isOnline, loadConversation, setActiveTab, unfriend,
+  receiver, setReceiver, addFriend, friends, isOnline, loadConversation, setActiveTab, unfriend, handleViewProfile,
 }: any) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -45,12 +45,15 @@ export function TabFriends({
             return (
               <div key={other} onClick={() => { loadConversation(other); setActiveTab("chats"); }}
                 className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 hover:border-zinc-700 transition-colors mb-2 flex items-center gap-3 cursor-pointer">
-                <div className="relative flex-shrink-0">
+                <div className="relative flex-shrink-0 cursor-pointer" onClick={(e) => { e.stopPropagation(); handleViewProfile(other); }}>
                   <Avatar wallet={other} profile={profiles[other]} size={44} />
                   <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-zinc-900 ${isOnline(other) ? "bg-green-400" : "bg-zinc-600"}`} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-white text-sm font-semibold">{getDisplayName(other)}</div>
+                  <div className="text-white text-sm font-semibold flex items-center gap-1">
+                    {getDisplayName(other)}
+                    {profiles[other]?.is_premium && <span className="text-green-400 text-xs">✅</span>}
+                  </div>
                   <div className="text-zinc-500 text-xs">
                     {profiles[other]?.status === "busy" ? "🔴 Busy" : profiles[other]?.status === "away" ? "🟡 Away" : isOnline(other) ? "🟢 Online" : "⚫ Offline"}
                     {profiles[other]?.status_text ? ` — ${profiles[other].status_text}` : ""}

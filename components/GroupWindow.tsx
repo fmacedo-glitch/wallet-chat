@@ -14,6 +14,7 @@ export function GroupWindow({
   contextMenu, setContextMenu, toggleReaction, reactions, copyMessage,
   selectedMsgs, selectionMode, toggleSelectMsg, clearSelection,
   showDeleteConfirm, setShowDeleteConfirm, deleteSelected,
+  handleViewProfile, loadConversation,
 }: any) {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const groupContextMenu = contextMenu;
@@ -75,11 +76,19 @@ export function GroupWindow({
             <div className="flex flex-col gap-1.5 max-h-36 overflow-y-auto">
               {groupMembers.map((m: any) => (
                 <div key={m.wallet} className="flex items-center gap-2">
-                  <Avatar wallet={m.wallet} profile={profiles[m.wallet]} size={28} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-white text-xs font-medium">{getDisplayName(m.wallet)}</div>
+                  <div className="cursor-pointer" onClick={() => handleViewProfile && handleViewProfile(m.wallet)}>
+                    <Avatar wallet={m.wallet} profile={profiles[m.wallet]} size={28} />
+                  </div>
+                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleViewProfile && handleViewProfile(m.wallet)}>
+                    <div className="text-white text-xs font-medium hover:text-green-400 transition-colors">{getDisplayName(m.wallet)}</div>
                     {m.role === "owner" && <div className="text-yellow-500 text-[10px]">Admin</div>}
                   </div>
+                  {m.wallet !== publicKey?.toBase58() && (
+                    <button onClick={() => { loadConversation && loadConversation(m.wallet); setShowGroupInfo(false); setActiveGroup(null); setActiveTab("chats"); }}
+                      className="text-green-600 hover:text-green-400 text-[10px] transition-colors flex-shrink-0 px-1.5 py-0.5 bg-zinc-700 rounded">
+                      PM
+                    </button>
+                  )}
                   {activeGroup.owner === publicKey?.toBase58() && m.wallet !== publicKey?.toBase58() && (
                     <button onClick={() => removeMemberFromGroup(m.wallet)} className="text-zinc-600 hover:text-red-400 text-xs">✕</button>
                   )}
@@ -210,9 +219,18 @@ export function GroupWindow({
                     {selectedMsgs?.has(msg.id) && <span className="text-white text-[10px] font-bold">✓</span>}
                   </div>
                 )}
-                {!isMine && <Avatar wallet={msg.sender} profile={profiles[msg.sender]} size={24} />}
+                {!isMine && (
+                  <div className="cursor-pointer flex-shrink-0" onClick={(e) => { e.stopPropagation(); handleViewProfile && handleViewProfile(msg.sender); }}>
+                    <Avatar wallet={msg.sender} profile={profiles[msg.sender]} size={24} />
+                  </div>
+                )}
                 <div className={`flex flex-col gap-0.5 max-w-[80%] min-w-0 ${isMine ? "items-end" : "items-start"}`}>
-                  {!isMine && <div className="text-[10px] text-zinc-500 px-1">{getDisplayName(msg.sender)}</div>}
+                  {!isMine && (
+                    <div className="text-[10px] text-zinc-500 px-1 cursor-pointer hover:text-zinc-300 transition-colors"
+                      onClick={(e) => { e.stopPropagation(); handleViewProfile && handleViewProfile(msg.sender); }}>
+                      {getDisplayName(msg.sender)}
+                    </div>
+                  )}
                   {msg.deleted_for_all ? (
                     <div className="px-3 py-2 rounded-2xl bg-zinc-800/50 border border-zinc-700 text-zinc-500 text-xs italic">🚫 Deleted</div>
                   ) : (

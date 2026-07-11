@@ -1,4 +1,4 @@
-export function BottomNav({ unreadCounts, friendRequests, publicKey, activeTab, setActiveTab, setActiveChat, setActiveGroup }: any) {
+export function BottomNav({ unreadCounts, friendRequests, publicKey, activeTab, setActiveTab, setActiveChat, setActiveGroup, unreadGroups }: any) {
   return (
     <div className="flex-shrink-0 border-t border-zinc-800 bg-zinc-950 flex items-center justify-around px-2 py-2">
       {([
@@ -18,7 +18,7 @@ export function BottomNav({ unreadCounts, friendRequests, publicKey, activeTab, 
           key: "groups",
           icon: "🏠",
           label: "Groups",
-          badge: 0,
+          badge: unreadGroups?.size || 0,
         },
         {
           key: "settings",

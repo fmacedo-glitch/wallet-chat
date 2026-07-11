@@ -1,7 +1,7 @@
 import { Avatar } from "./Avatar";
 
 export function TabChats({
-  receiver, setReceiver, loadConversation, inboxMessages, profiles, isOnline, unreadCounts, getDisplayName, formatInboxTime,
+  receiver, setReceiver, loadConversation, inboxMessages, profiles, isOnline, unreadCounts, getDisplayName, formatInboxTime, handleViewProfile,
 }: any) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -17,20 +17,20 @@ export function TabChats({
         </div>
         {inboxMessages.length === 0 && <div className="text-zinc-500 text-sm text-center py-8">No conversations yet</div>}
         {inboxMessages.map((msg: any) => (
-          <button key={msg.otherWallet} onClick={() => loadConversation(msg.otherWallet)}
-            className={`border rounded-xl p-3 text-left hover:border-zinc-700 transition-colors ${
-              unreadCounts[msg.otherWallet] > 0
-                ? "bg-zinc-800 border-green-800"
-                : "bg-zinc-900 border-zinc-800"
-            }`}>
+          <div key={msg.otherWallet}
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-left hover:border-zinc-700 transition-colors cursor-pointer"
+            onClick={() => loadConversation(msg.otherWallet)}>
             <div className="flex items-center gap-3">
-              <div className="relative flex-shrink-0">
+              <div className="relative flex-shrink-0" onClick={(e) => { e.stopPropagation(); handleViewProfile(msg.otherWallet); }}>
                 <Avatar wallet={msg.otherWallet} profile={profiles[msg.otherWallet]} size={44} />
                 <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-zinc-900 ${isOnline(msg.otherWallet) ? "bg-green-400" : "bg-zinc-600"}`} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between mb-0.5">
-                  <div className="text-white text-sm font-semibold truncate">{getDisplayName(msg.otherWallet)}</div>
+                  <div className="text-white text-sm font-semibold truncate flex items-center gap-1">
+                    {getDisplayName(msg.otherWallet)}
+                    {profiles[msg.otherWallet]?.is_premium && <span className="text-green-400 text-xs">✅</span>}
+                  </div>
                   <div className="text-[10px] text-zinc-500 flex-shrink-0 ml-1">{msg.created_at ? formatInboxTime(msg.created_at) : ""}</div>
                 </div>
                 <div className="flex items-center justify-between gap-1">
@@ -41,7 +41,7 @@ export function TabChats({
                 </div>
               </div>
             </div>
-          </button>
+          </div>
         ))}
       </div>
     </div>

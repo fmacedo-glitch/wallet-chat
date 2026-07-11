@@ -84,6 +84,14 @@ const [unreadGroups, setUnreadGroups] = useState<Set<string>>(new Set());
   const [friends, setFriends] = useState<any[]>([]);
   const [username, setUsername] = useState("");
   const [savedUsername, setSavedUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const [isPremium, setIsPremium] = useState(false);
+  const [premiumExpires, setPremiumExpires] = useState<string | null>(null);
+  const [walletPrivate, setWalletPrivate] = useState(false);
+  const [dailyViewCount, setDailyViewCount] = useState(0);
+  const [viewedProfile, setViewedProfile] = useState<any>(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
   const [blockedUsers, setBlockedUsers] = useState<any[]>([]);
   const [blockedByUsers, setBlockedByUsers] = useState<any[]>([]);
   const [profiles, setProfiles] = useState<any>({});
@@ -299,9 +307,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
   async function loadGroupMessages(groupId: string) {
     const { data } = await supabase.from("group_messages").select("*").eq("group_id", groupId)
       .order("created_at", { ascending: false }).limit(50);
-    const msgs = (data || []).reverse();
-    setGroupMessages(msgs);
-    if (msgs.length) fetchReactions(msgs.map((m: any) => m.id));
+    setGroupMessages((data || []).reverse());
   }
 
   async function fetchGroupMembers(groupId: string) {
@@ -410,8 +416,13 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
   function getDisplayName(wallet?: string) {
     if (!wallet) return "Unknown";
     const profile = profiles[wallet];
+    if (profile?.display_name) return profile.display_name;
     if (profile?.username) return `@${profile.username}`;
     return `${wallet.slice(0, 4)}...${wallet.slice(-4)}`;
+  }
+
+  function getUserBadge(wallet: string) {
+    return profiles[wallet]?.is_premium ? "✅" : null;
   }
 
   async function addFriend(wallet: string) {
@@ -489,9 +500,24 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     fetchBlockedUsers();
   }
 
+  function validateUsername(val: string) {
+    return /^[a-zA-Z0-9_]{1,30}$/.test(val);
+  }
+
   async function saveProfile() {
     if (!publicKey) return;
-    const { error } = await supabase.from("profiles").upsert({ wallet: publicKey.toBase58(), username });
+    if (username && !validateUsername(username)) {
+      alert("Username can only contain letters, numbers and underscores. No spaces.");
+      return;
+    }
+    const updates: any = {
+      wallet: publicKey.toBase58(),
+      username: username || null,
+      display_name: displayName || null,
+      wallet_private: walletPrivate,
+    };
+    if (avatarUrl) updates.avatar_url = avatarUrl;
+    const { error } = await supabase.from("profiles").upsert(updates);
     if (error) { alert("Error saving profile"); return; }
     setSavedUsername(username); fetchProfiles(); alert("Profile saved!");
   }
@@ -499,7 +525,68 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
   async function loadProfile() {
     if (!publicKey) return;
     const { data } = await supabase.from("profiles").select("*").eq("wallet", publicKey.toBase58()).single();
-    if (data) { setUsername(data.username || ""); setSavedUsername(data.username || ""); }
+    if (data) {
+      setUsername(data.username || ""); setSavedUsername(data.username || "");
+      setDisplayName(data.display_name || ""); setAvatarUrl(data.avatar_url || "");
+      setWalletPrivate(data.wallet_private || false); setIsPremium(data.is_premium || false);
+      setPremiumExpires(data.premium_expires_at || null);
+    }
+  }
+
+  async function checkDailyViewLimit() {
+    if (!publicKey) return 0;
+    const today = new Date().toISOString().split("T")[0];
+    const { data } = await supabase.from("daily_wallet_views").select("count").eq("wallet", publicKey.toBase58()).eq("view_date", today).single();
+    const count = data?.count || 0; setDailyViewCount(count); return count;
+  }
+
+  async function incrementViewCount(targetWallet: string) {
+    if (!publicKey) return;
+    const today = new Date().toISOString().split("T")[0];
+    await supabase.from("daily_wallet_views").upsert({ wallet: publicKey.toBase58(), view_date: today, count: dailyViewCount + 1 });
+    setDailyViewCount((prev) => prev + 1);
+    await supabase.from("wallet_views").upsert({ viewer: publicKey.toBase58(), viewed: targetWallet, viewed_at: new Date().toISOString() });
+  }
+
+  async function handleViewProfile(wallet: string) {
+    if (!wallet || wallet === publicKey?.toBase58()) return;
+    if (!isPremium) {
+      const count = await checkDailyViewLimit();
+      if (count >= 5) { alert("You've reached your daily limit of 5 profile views. Upgrade to Premium for unlimited views!"); return; }
+    }
+    const { data: profileData } = await supabase.from("profiles").select("*").eq("wallet", wallet).single();
+    setViewedProfile({ wallet, ...profileData });
+    setShowProfileModal(true);
+    if (!isPremium) await incrementViewCount(wallet);
+  }
+
+  async function handleAvatarUpload(file: File) {
+    if (!file) return;
+    if (file.size > 500000) { alert("Image too large. Max 500KB."); return; }
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const base64 = e.target?.result as string;
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX = 100; let w = img.width, h = img.height;
+        if (w > h) { if (w > MAX) { h = h * MAX / w; w = MAX; } } else { if (h > MAX) { w = w * MAX / h; h = MAX; } }
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d"); ctx?.drawImage(img, 0, 0, w, h);
+        setAvatarUrl(canvas.toDataURL("image/jpeg", 0.7));
+      };
+      img.src = base64;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function checkPremiumStatus() {
+    if (!publicKey) return;
+    const { data } = await supabase.from("profiles").select("is_premium, premium_expires_at").eq("wallet", publicKey.toBase58()).single();
+    if (data?.is_premium && data?.premium_expires_at) {
+      if (new Date(data.premium_expires_at) > new Date()) { setIsPremium(true); setPremiumExpires(data.premium_expires_at); }
+      else { setIsPremium(false); await supabase.from("profiles").update({ is_premium: false }).eq("wallet", publicKey.toBase58()); }
+    }
   }
 
   async function loadMessageExpiry() {
@@ -665,7 +752,14 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     if (!wallet) return;
     if (!publicKey) { setActiveChat(wallet); return; }
     setActiveChat(wallet); setActiveGroup(null);
+    setShowNFTs(false);
     setUnreadCounts((prev: any) => ({ ...prev, [wallet]: 0 }));
+    // Add to inbox immediately if not already there
+    setInboxMessages((prev) => {
+      const exists = prev.find((m: any) => m.otherWallet === wallet);
+      if (exists) return prev;
+      return [{ otherWallet: wallet, content: "", created_at: new Date().toISOString(), sender: publicKey.toBase58(), receiver: wallet }, ...prev];
+    });
     const { data, error } = await supabase.from("messages").select("*")
       .or(`and(sender.eq.${publicKey.toBase58()},receiver.eq.${wallet}),and(sender.eq.${wallet},receiver.eq.${publicKey.toBase58()})`)
       .order("created_at", { ascending: false }).limit(50);
@@ -704,6 +798,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     fetchProfiles(); loadProfile(); fetchPresence();
     checkGateAccess(); loadMessageExpiry();
     fetchNotifications(); loadMyStatus(); fetchGroups();
+    checkPremiumStatus(); checkDailyViewLimit();
 
     if (!publicKey) return;
     updatePresence();
@@ -752,10 +847,8 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "profiles" }, (payload) => { const updated = payload.new as any; if (updated?.wallet) setProfiles((prev: any) => ({ ...prev, [updated.wallet]: { ...prev[updated.wallet], ...updated } })); })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "group_messages" }, (payload) => {
   const msg = payload.new as any;
-  if (activeGroupRef.current && msg.group_id === activeGroupRef.current.id) {
-    setGroupMessages((prev) => { if (prev.find((m: any) => m.id === msg.id)) return prev; return [...prev, msg]; });
-    fetchReactions([msg.id]);
-  } else {
+  if (activeGroupRef.current && msg.group_id === activeGroupRef.current.id) setGroupMessages((prev) => { if (prev.find((m: any) => m.id === msg.id)) return prev; return [...prev, msg]; });
+  if (!activeGroupRef.current || msg.group_id !== activeGroupRef.current.id) {
     setUnreadGroups((prev) => new Set([...prev, msg.group_id]));
   }
       })
@@ -771,6 +864,83 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
 
   const amIBlocked = activeChat ? isBlockedByThem(activeChat) : false;
   const didIBlock = activeChat ? isBlocked(activeChat) : false;
+
+  const ProfileModal = showProfileModal && viewedProfile ? (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setShowProfileModal(false)}>
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-4 mb-5">
+          {viewedProfile.avatar_url ? (
+            <img src={viewedProfile.avatar_url} alt="avatar" className="w-16 h-16 rounded-full object-cover border-2 border-zinc-700" />
+          ) : (
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-green-400 flex items-center justify-center text-white text-2xl font-bold">
+              {(viewedProfile.display_name || viewedProfile.username || viewedProfile.wallet || "?").slice(0, 1).toUpperCase()}
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5">
+              <div className="text-white font-bold text-lg truncate">
+                {viewedProfile.display_name || (viewedProfile.username ? `@${viewedProfile.username}` : `${viewedProfile.wallet?.slice(0, 6)}...`)}
+              </div>
+              {viewedProfile.is_premium && <span className="text-green-400 text-sm">✅</span>}
+            </div>
+            {viewedProfile.display_name && viewedProfile.username && (
+              <div className="text-zinc-400 text-sm">@{viewedProfile.username}</div>
+            )}
+            <div className="text-zinc-600 text-xs font-mono truncate mt-0.5">{viewedProfile.wallet}</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          <button onClick={() => { loadConversation(viewedProfile.wallet); setShowProfileModal(false); }}
+            className="bg-green-600 hover:bg-green-500 text-white rounded-xl py-2.5 text-sm font-bold transition-colors col-span-2">
+            💬 Send Message
+          </button>
+          {!isFriend(viewedProfile.wallet) ? (
+            <button onClick={() => { addFriend(viewedProfile.wallet); setShowProfileModal(false); }}
+              className="bg-zinc-700 hover:bg-zinc-600 text-white rounded-xl py-2.5 text-sm font-bold transition-colors">
+              ➕ Add Friend
+            </button>
+          ) : (
+            <button onClick={() => { unfriend(viewedProfile.wallet); setShowProfileModal(false); }}
+              className="bg-zinc-700 hover:bg-zinc-600 text-white rounded-xl py-2.5 text-sm transition-colors">
+              Remove Friend
+            </button>
+          )}
+          {!isBlocked(viewedProfile.wallet) ? (
+            <button onClick={() => { blockUser(viewedProfile.wallet); setShowProfileModal(false); }}
+              className="bg-red-900 hover:bg-red-800 text-white rounded-xl py-2.5 text-sm transition-colors">
+              🚫 Block
+            </button>
+          ) : (
+            <button onClick={() => { unblockUser(viewedProfile.wallet); setShowProfileModal(false); }}
+              className="bg-zinc-700 hover:bg-zinc-600 text-white rounded-xl py-2.5 text-sm transition-colors">
+              Unblock
+            </button>
+          )}
+          {!viewedProfile.wallet_private ? (
+            <button onClick={() => {
+                const w = viewedProfile.wallet;
+                setShowProfileModal(false);
+                loadConversation(w);
+                fetchNFTs(w);
+                fetchOtherWalletTokens(w);
+                setTimeout(() => setShowNFTs(true), 100);
+              }}
+              className="bg-purple-700 hover:bg-purple-600 text-white rounded-xl py-2.5 text-sm transition-colors col-span-2">
+              🖼 View Wallet (NFTs & Tokens)
+            </button>
+          ) : (
+            <div className="col-span-2 bg-zinc-800 text-zinc-500 rounded-xl py-2.5 text-sm text-center">
+              🔒 Wallet is private
+            </div>
+          )}
+        </div>
+        {!isPremium && (
+          <div className="text-center text-zinc-600 text-xs">{dailyViewCount}/5 free profile views today</div>
+        )}
+        <button onClick={() => setShowProfileModal(false)} className="w-full mt-2 text-zinc-500 hover:text-white text-sm transition-colors">Close</button>
+      </div>
+    </div>
+  ) : null;
 
   if (gateEnabled && gateAccess === "checking") {
     return (
@@ -836,17 +1006,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
             ))}
           </div>
           <div className="h-px bg-zinc-800 mx-2 my-1" />
-          {msg.sender === publicKey?.toBase58() ? (
-            <>
-              <button onClick={() => { setContextMenu(null); setSelectionMode(true); toggleSelectMsg(msg.id); setShowDeleteConfirm("me"); }}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 Delete for me</button>
-              <button onClick={() => { setContextMenu(null); setSelectionMode(true); toggleSelectMsg(msg.id); setShowDeleteConfirm("all"); }}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 Delete for everyone</button>
-            </>
-          ) : (
-            <button onClick={() => { setContextMenu(null); setSelectionMode(true); toggleSelectMsg(msg.id); setShowDeleteConfirm("me"); }}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 Delete for me</button>
-          )}
+          <button onClick={() => { setContextMenu(null); setSelectionMode(true); toggleSelectMsg(msg.id); }} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 Delete</button>
         </div>
       </>
     );
@@ -857,7 +1017,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     activeChat, setActiveChat, setActiveTab, profiles, isOnline, getDisplayName, otherIsTyping,
     showSearch, setShowSearch, searchQuery, setSearchQuery, chatMessages, publicKey,
     fetchNFTs, fetchOtherWalletTokens, showNFTs, setShowNFTs, nftWallet, setNftTab, nftTab,
-    isFriend, unfriend, addFriend, isBlocked, blockUser, unblockUser, friendRequests,
+    isFriend, unfriend, addFriend, isBlocked, blockUser, unblockUser,
     loadingNFTs, nfts, loadingOtherTokens, otherTokens,
     messagesContainerRef, hasMoreMessages, loadMoreMessages, loadingMore,
     reactions, selectedMsgs, selectionMode, toggleSelectMsg, toggleReaction, setContextMenu, contextMenu,
@@ -866,18 +1026,20 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     selectedToken, setSelectedToken, solAmount, setSolAmount, sendSol, sendingSol, fetchWalletTokens,
     message, handleMessageInput, textareaRef, showEmojiPicker, setShowEmojiPicker,
     replyTo, setReplyTo, autoResize, setMessage, sendMessage,
+    handleViewProfile, getUserBadge, isPremium,
   };
 
   const groupWindowProps = {
     activeGroup, setActiveGroup, setActiveTab, groupMembers, showGroupInfo, setShowGroupInfo,
     profiles, getDisplayName, publicKey, removeMemberFromGroup, groupRequests,
     approveGroupRequest, rejectGroupRequest, addMemberWallet, setAddMemberWallet, addMemberToGroup,
-    friends, addFriendToGroup, deleteGroup, leaveGroup, groupMessages,
+    friends, addFriendToGroup, deleteGroup, leaveGroup, groupMessages, messagesContainerRef,
     message, handleMessageInput, textareaRef, showEmojiPicker, setShowEmojiPicker,
     replyTo, setReplyTo, autoResize, setMessage, sendGroupMessage, fetchGroups,
     contextMenu, setContextMenu, toggleReaction, reactions, copyMessage,
     selectedMsgs, selectionMode, toggleSelectMsg, clearSelection,
     showDeleteConfirm, setShowDeleteConfirm, deleteSelected,
+    handleViewProfile, loadConversation,
   };
 
   // NOTE: this is a plain JSX value, not a component function. If it were
@@ -892,13 +1054,14 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
       {activeTab === "chats" && !activeChat && !activeGroup && (
         <TabChats receiver={receiver} setReceiver={setReceiver} loadConversation={loadConversation}
           inboxMessages={inboxMessages} profiles={profiles} isOnline={isOnline} unreadCounts={unreadCounts}
-          getDisplayName={getDisplayName} formatInboxTime={formatInboxTime} />
+          getDisplayName={getDisplayName} formatInboxTime={formatInboxTime} handleViewProfile={handleViewProfile} />
       )}
       {activeTab === "friends" && !activeChat && !activeGroup && (
         <TabFriends friendRequests={friendRequests} publicKey={publicKey} profiles={profiles}
           getDisplayName={getDisplayName} acceptFriend={acceptFriend} rejectFriend={rejectFriend}
           receiver={receiver} setReceiver={setReceiver} addFriend={addFriend} friends={friends}
-          isOnline={isOnline} loadConversation={loadConversation} setActiveTab={setActiveTab} unfriend={unfriend} />
+          isOnline={isOnline} loadConversation={loadConversation} setActiveTab={setActiveTab} unfriend={unfriend}
+          handleViewProfile={handleViewProfile} />
       )}
       {activeTab === "groups" && !activeGroup && !activeChat && (
         <TabGroups setShowCreateGroup={setShowCreateGroup} searchGroupQuery={searchGroupQuery}
@@ -913,8 +1076,11 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
       )}
       {activeTab === "settings" && !activeChat && !activeGroup && (
         <TabSettings publicKey={publicKey} profiles={profiles} savedUsername={savedUsername}
-          username={username} setUsername={setUsername} saveProfile={saveProfile} myStatus={myStatus}
-          myStatusText={myStatusText} setMyStatusText={setMyStatusText} saveStatus={saveStatus}
+          username={username} setUsername={setUsername} saveProfile={saveProfile}
+          displayName={displayName} setDisplayName={setDisplayName}
+          avatarUrl={avatarUrl} handleAvatarUpload={handleAvatarUpload}
+          isPremium={isPremium} premiumExpires={premiumExpires}
+          walletPrivate={walletPrivate} setWalletPrivate={setWalletPrivate}
           messageExpiryDays={messageExpiryDays} saveMessageExpiry={saveMessageExpiry} />
       )}
       {activeChat && <ChatWindow {...chatWindowProps} />}
@@ -926,6 +1092,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
   return (
     <main className="bg-black text-white flex flex-col overflow-hidden" style={{ height: "100dvh" }}>
       {NotifBanner}
+      {ProfileModal}
 
       {/* Desktop */}
       <div className="hidden md:flex flex-1 overflow-hidden">

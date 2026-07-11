@@ -5,7 +5,7 @@ export function TabGroups({
   searchGroupResults, groups, openGroup, requestJoinGroup, publicKey,
   showCreateGroup, newGroupName, setNewGroupName, newGroupDesc, setNewGroupDesc,
   groupIsPublic, setGroupIsPublic, groupRequiresApproval, setGroupRequiresApproval,
-  friends, profiles, getDisplayName, createGroup, creatingGroup,
+  friends, profiles, getDisplayName, createGroup, creatingGroup, unreadGroups,
 }: any) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -65,17 +65,25 @@ export function TabGroups({
         )}
         {groups.map((group: any) => (
           <button key={group.id} onClick={() => openGroup(group)}
-            className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-left hover:border-zinc-700 transition-colors">
+            className={`border rounded-xl p-3 text-left hover:border-zinc-700 transition-colors ${
+              unreadGroups?.has(group.id) ? "bg-zinc-800 border-zinc-700" : "bg-zinc-900 border-zinc-800"
+            }`}>
             <div className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-lg flex-shrink-0"
-                style={{ background: `linear-gradient(135deg, ${group.avatar_color}, #14F195)` }}>
+              <div className="relative flex-shrink-0">
+                <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-lg"
+                  style={{ background: `linear-gradient(135deg, ${group.avatar_color}, #14F195)` }}>
                 {group.name.slice(0, 1).toUpperCase()}
+                </div>
+                {unreadGroups?.has(group.id) && (
+                  <div className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-red-500 border-2 border-zinc-900" />
+                )}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-white text-sm font-semibold">{group.name}</div>
                 <div className="text-zinc-500 text-xs truncate">{group.description || "No description"}</div>
               </div>
               {group.owner === publicKey?.toBase58() && <div className="text-[10px] text-yellow-500 font-bold flex-shrink-0">ADMIN</div>}
+              {unreadGroups?.has(group.id) && <div className="w-2.5 h-2.5 rounded-full bg-red-500 flex-shrink-0" />}
             </div>
           </button>
         ))}
