@@ -49,7 +49,7 @@ export default function AdminDashboard() {
   const [lookupLoading, setLookupLoading] = useState(false);
 
   // Active tab
-  const [tab, setTab] = useState<"overview" | "gates" | "settings" | "users" | "messages" | "notifications" | "premium">("overview");
+  const [tab, setTab] = useState<"overview" | "gates" | "settings" | "users" | "messages" | "notifications" | "premium" | "groups" | "bans">("overview");
 
   // Users
   const [users, setUsers] = useState<any[]>([]);
@@ -67,6 +67,26 @@ export default function AdminDashboard() {
   const [premiumMonths, setPremiumMonths] = useState(1);
   const [grantingPremium, setGrantingPremium] = useState(false);
 
+  // Premium price
+  const [premiumPrice, setPremiumPrice] = useState("0.05");
+
+  // Search
+  const [userSearch, setUserSearch] = useState("");
+  const [groupSearch, setGroupSearch] = useState("");
+
+  // Groups management
+  const [adminGroups, setAdminGroups] = useState<any[]>([]);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [groupMsgs, setGroupMsgs] = useState<any[]>([]);
+  const [loadingGroupMsgs, setLoadingGroupMsgs] = useState(false);
+
+  // User bans
+  const [banWallet, setBanWallet] = useState("");
+  const [banReason, setBanReason] = useState("");
+  const [banDays, setBanDays] = useState(0);
+  const [bannedUsers, setBannedUsers] = useState<any[]>([]);
+  const [banning, setBanning] = useState(false);
+
   // Notifications broadcast
 const [notifTitle, setNotifTitle] = useState("");
 const [notifMessage, setNotifMessage] = useState("");
@@ -82,6 +102,12 @@ const [notifHistory, setNotifHistory] = useState<any[]>([]);
     fetchConversations();
     fetchNotifHistory();
     fetchPremiumUsers();
+    fetchAdminGroups();
+    fetchBannedUsers();
+    // Load premium price
+    supabase.from("app_settings").select("value").eq("key", "premium_price_sol").single().then(({ data }) => {
+      if (data?.value) setPremiumPrice(data.value);
+    });
   }, [publicKey]);
 
   async function checkAdmin() {
@@ -243,7 +269,66 @@ const [notifHistory, setNotifHistory] = useState<any[]>([]);
     setConversations(Array.from(convMap.values()));
   }
 
-async function fetchPremiumUsers() {
+async function fetchAdminGroups() {
+    const { data } = await supabase.from("groups").select("*").order("created_at", { ascending: false });
+    setAdminGroups(data || []);
+  }
+
+  async function fetchGroupMessages(groupId: string) {
+    setLoadingGroupMsgs(true);
+    setSelectedGroupId(groupId);
+    const { data } = await supabase.from("group_messages").select("*")
+      .eq("group_id", groupId).order("created_at", { ascending: true });
+    setGroupMsgs(data || []);
+    setLoadingGroupMsgs(false);
+  }
+
+  async function deleteGroup(groupId: string) {
+    if (!confirm("Delete this group permanently?")) return;
+    await supabase.from("groups").delete().eq("id", groupId);
+    fetchAdminGroups();
+    if (selectedGroupId === groupId) { setSelectedGroupId(null); setGroupMsgs([]); }
+  }
+
+  async function deleteUser(wallet: string) {
+    if (!confirm(`Delete user ${wallet.slice(0,8)}...? This removes their profile and messages.`)) return;
+    await supabase.from("messages").delete().or(`sender.eq.${wallet},receiver.eq.${wallet}`);
+    await supabase.from("profiles").delete().eq("wallet", wallet);
+    await supabase.from("group_members").delete().eq("wallet", wallet);
+    fetchUsers();
+    alert("User deleted.");
+  }
+
+  async function fetchBannedUsers() {
+    const { data } = await supabase.from("blocked_users")
+      .select("*").eq("blocker", "ADMIN").order("created_at", { ascending: false });
+    setBannedUsers(data || []);
+  }
+
+  async function banUser() {
+    if (!banWallet.trim()) { alert("Enter a wallet"); return; }
+    setBanning(true);
+    const expiresAt = banDays > 0 ? new Date(Date.now() + banDays * 86400000).toISOString() : null;
+    await supabase.from("blocked_users").upsert({
+      blocker: "ADMIN",
+      blocked: banWallet.trim(),
+      reason: banReason || "Banned by admin",
+      expires_at: expiresAt,
+      created_at: new Date().toISOString(),
+    });
+    setBanWallet(""); setBanReason(""); setBanDays(0);
+    fetchBannedUsers();
+    setBanning(false);
+    alert("✅ User banned" + (banDays > 0 ? ` for ${banDays} days` : " permanently"));
+  }
+
+  async function unbanUser(wallet: string) {
+    if (!confirm("Unban this user?")) return;
+    await supabase.from("blocked_users").delete().eq("blocker", "ADMIN").eq("blocked", wallet);
+    fetchBannedUsers();
+  }
+
+  async function fetchPremiumUsers() {
     const { data } = await supabase.from("profiles")
       .select("wallet, username, display_name, is_premium, premium_expires_at")
       .eq("is_premium", true)
@@ -367,6 +452,8 @@ async function sendBroadcast() {
             { key: "users", icon: "👥", label: "Users" },
             { key: "premium", icon: "⭐", label: "Premium" },
             { key: "messages", icon: "💬", label: "Messages" },
+            { key: "groups", icon: "👥", label: "Groups" },
+            { key: "bans", icon: "🚫", label: "Bans" },
             { key: "notifications", icon: "📢", label: "Notifications" },
             { key: "settings", icon: "⚙️", label: "Settings" },
           ].map((item) => (
@@ -594,11 +681,20 @@ async function sendBroadcast() {
           {tab === "users" && (
             <div className="flex flex-col gap-4">
               <div className="flex items-center justify-between">
-                <div className="text-lg font-bold">Utilizatori ({users.length})</div>
+                <div className="text-lg font-bold">Users ({users.length})</div>
                 <button onClick={fetchUsers} className="text-zinc-500 hover:text-white text-sm">↻ Refresh</button>
               </div>
+              <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)}
+                placeholder="Search by name or wallet..."
+                className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-zinc-500 w-full" />
               <div className="flex flex-col gap-2">
-                {users.map((user) => (
+                {users.filter((user: any) => {
+                  if (!userSearch) return true;
+                  const q = userSearch.toLowerCase();
+                  return user.wallet?.toLowerCase().includes(q) ||
+                    user.username?.toLowerCase().includes(q) ||
+                    user.display_name?.toLowerCase().includes(q);
+                }).map((user: any) => (
                   <div key={user.wallet} className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 flex items-center gap-3">
                     <div className={`w-2 h-2 rounded-full flex-shrink-0 ${user.online ? "bg-green-400" : "bg-zinc-600"}`} />
                     <div className="flex-1 min-w-0">
@@ -608,9 +704,15 @@ async function sendBroadcast() {
                       </div>
                       {user.last_seen && (
                         <div className="text-zinc-600 text-[10px] mt-0.5">
-                          {user.online ? "Online acum" : `Ultima dată: ${new Date(user.last_seen).toLocaleString("ro-RO")}`}
+                          {user.online ? "Online now" : `Last seen: ${new Date(user.last_seen).toLocaleString("en-US")}`}
                         </div>
                       )}
+                    </div>
+                    <div className="flex flex-col gap-1 items-end flex-shrink-0">
+                      <button onClick={() => deleteUser(user.wallet)}
+                        className="text-red-600 hover:text-red-400 text-xs transition-colors">🗑 Delete</button>
+                      <button onClick={() => { setBanWallet(user.wallet); setTab("bans"); }}
+                        className="text-orange-500 hover:text-orange-300 text-xs transition-colors">🚫 Ban</button>
                     </div>
                   </div>
                 ))}
@@ -652,12 +754,12 @@ async function sendBroadcast() {
                     >
                       <div className="flex items-center justify-between mb-1">
                         <div className="text-[10px] text-zinc-500 font-mono truncate">
-                          {conv.wallet1.slice(0, 6)}...{conv.wallet1.slice(-4)}
+                          {users.find((u: any) => u.wallet === conv.wallet1)?.username ? `@${users.find((u: any) => u.wallet === conv.wallet1).username}` : conv.wallet1.slice(0, 6) + "..." + conv.wallet1.slice(-4)}
                         </div>
                         <div className="text-[10px] text-zinc-600">{conv.count} msg</div>
                       </div>
                       <div className="text-[10px] text-zinc-500 font-mono truncate">
-                        {conv.wallet2.slice(0, 6)}...{conv.wallet2.slice(-4)}
+                        {users.find((u: any) => u.wallet === conv.wallet2)?.username ? `@${users.find((u: any) => u.wallet === conv.wallet2).username}` : conv.wallet2.slice(0, 6) + "..." + conv.wallet2.slice(-4)}
                       </div>
                       <div className="text-xs text-zinc-400 mt-1.5 truncate">
                         {conv.lastMessage.deleted_for_all
@@ -707,7 +809,10 @@ async function sendBroadcast() {
                               : msg.sender === activeConv.wallet1 ? "bg-zinc-800" : "bg-green-800"
                           }`}>
                             <div className="text-[9px] text-zinc-500 mb-1 font-mono flex items-center gap-1">
-                              {msg.sender.slice(0, 6)}...{msg.sender.slice(-4)}
+                              {users.find((u: any) => u.wallet === msg.sender)?.username
+                                ? `@${users.find((u: any) => u.wallet === msg.sender).username}`
+                                : users.find((u: any) => u.wallet === msg.sender)?.display_name
+                                  || `${msg.sender.slice(0, 6)}...${msg.sender.slice(-4)}`}
                               {isDeleted && <span className="text-red-400 font-bold">• ȘTERS PENTRU TOȚI</span>}
                               {isDeletedForSender && <span className="text-orange-400 font-bold">• șters pentru sender</span>}
                               {isDeletedForReceiver && <span className="text-orange-400 font-bold">• șters pentru receiver</span>}
@@ -810,6 +915,150 @@ async function sendBroadcast() {
             </div>
           )}
 
+          {/* GROUPS */}
+          {tab === "groups" && (
+            <div className="flex gap-4 h-[calc(100vh-120px)]">
+              {/* Groups list */}
+              <div className="w-72 flex flex-col gap-2 overflow-y-auto">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="font-bold">Groups ({adminGroups.length})</div>
+                  <button onClick={fetchAdminGroups} className="text-zinc-500 hover:text-white text-xs">↻</button>
+                </div>
+                <input value={groupSearch} onChange={(e) => setGroupSearch(e.target.value)}
+                  placeholder="Search groups..."
+                  className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-zinc-500 w-full mb-1" />
+                {adminGroups.filter((g: any) => !groupSearch || g.name?.toLowerCase().includes(groupSearch.toLowerCase()) || g.description?.toLowerCase().includes(groupSearch.toLowerCase())).map((group: any) => (
+                  <button key={group.id} onClick={() => fetchGroupMessages(group.id)}
+                    className={`text-left bg-zinc-900 border rounded-xl p-3 transition-colors ${selectedGroupId === group.id ? "border-green-700" : "border-zinc-800 hover:border-zinc-700"}`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
+                          style={{ background: `linear-gradient(135deg, ${group.avatar_color || "#9945FF"}, #14F195)` }}>
+                          {group.name.slice(0, 1).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-white text-sm font-medium truncate">{group.name}</div>
+                          <div className="text-zinc-500 text-[10px] truncate">{group.description || "No description"}</div>
+                        </div>
+                      </div>
+                      <button onClick={(e) => { e.stopPropagation(); deleteGroup(group.id); }}
+                        className="text-red-600 hover:text-red-400 text-xs ml-2 flex-shrink-0">🗑</button>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Group messages */}
+              <div className="flex-1 flex flex-col bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
+                {selectedGroupId ? (
+                  <>
+                    <div className="border-b border-zinc-800 px-4 py-3">
+                      <div className="font-bold text-sm">{adminGroups.find((g: any) => g.id === selectedGroupId)?.name}</div>
+                      <div className="text-zinc-500 text-xs">{groupMsgs.length} messages</div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
+                      {loadingGroupMsgs ? (
+                        <div className="text-zinc-500 text-sm text-center py-8">Loading...</div>
+                      ) : groupMsgs.map((msg: any) => (
+                        <div key={msg.id} className={`flex gap-2 group ${msg.deleted_for_all ? "opacity-50" : ""}`}>
+                          <div className="flex-1 bg-zinc-800 rounded-xl px-3 py-2 text-sm">
+                            <div className="text-[10px] text-zinc-400 mb-1 flex items-center gap-1">
+                              <span className="font-medium text-white">
+                                {users.find((u: any) => u.wallet === msg.sender)?.username
+                                  ? `@${users.find((u: any) => u.wallet === msg.sender).username}`
+                                  : msg.sender.slice(0, 6) + "..." + msg.sender.slice(-4)}
+                              </span>
+                              {msg.deleted_for_all && <span className="text-red-400">• DELETED</span>}
+                            </div>
+                            <div className={msg.deleted_for_all ? "italic text-zinc-500" : "text-white"}>{msg.content}</div>
+                            <div className="text-[9px] text-zinc-600 mt-1">{new Date(msg.created_at).toLocaleString("en-US")}</div>
+                          </div>
+                          <button onClick={async () => {
+                            if (!confirm("Delete this message?")) return;
+                            await supabase.from("group_messages").delete().eq("id", msg.id);
+                            fetchGroupMessages(selectedGroupId);
+                          }} className="opacity-0 group-hover:opacity-100 text-red-600 hover:text-red-400 text-xs transition-opacity self-start mt-2">🗑</button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm">Select a group</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* BANS */}
+          {tab === "bans" && (
+            <div className="flex flex-col gap-6 max-w-2xl">
+              <div className="text-lg font-bold">Ban Management</div>
+
+              {/* Ban user */}
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 flex flex-col gap-3">
+                <div className="font-semibold text-sm text-zinc-400 uppercase tracking-wide">Ban User</div>
+                <div>
+                  <div className="text-xs text-zinc-500 mb-1">Wallet Address</div>
+                  <input value={banWallet} onChange={(e) => setBanWallet(e.target.value)}
+                    placeholder="Wallet address..."
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 mb-1">Reason (optional)</div>
+                  <input value={banReason} onChange={(e) => setBanReason(e.target.value)}
+                    placeholder="Reason for ban..."
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 mb-1">Duration</div>
+                  <select value={banDays} onChange={(e) => setBanDays(Number(e.target.value))}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm">
+                    <option value={0}>Permanent</option>
+                    <option value={1}>1 day</option>
+                    <option value={7}>7 days</option>
+                    <option value={30}>30 days</option>
+                    <option value={90}>90 days</option>
+                  </select>
+                </div>
+                <button onClick={banUser} disabled={banning || !banWallet.trim()}
+                  className="bg-red-700 hover:bg-red-600 text-white px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 transition-colors">
+                  {banning ? "Banning..." : "🚫 Ban User"}
+                </button>
+              </div>
+
+              {/* Banned users list */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="font-semibold text-sm">Banned Users ({bannedUsers.length})</div>
+                  <button onClick={fetchBannedUsers} className="text-zinc-500 hover:text-white text-xs">↻ Refresh</button>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {bannedUsers.length === 0 && <div className="text-zinc-500 text-sm">No banned users</div>}
+                  {bannedUsers.map((b: any) => (
+                    <div key={b.blocked} className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-white text-sm font-medium">
+                          {users.find((u: any) => u.wallet === b.blocked)?.username
+                            ? `@${users.find((u: any) => u.wallet === b.blocked).username}`
+                            : b.blocked.slice(0, 8) + "..."}
+                        </div>
+                        <div className="text-zinc-500 text-xs font-mono truncate">{b.blocked}</div>
+                        {b.reason && <div className="text-zinc-600 text-xs mt-0.5">Reason: {b.reason}</div>}
+                        <div className="text-zinc-600 text-xs">
+                          {b.expires_at
+                            ? `Expires: ${new Date(b.expires_at).toLocaleDateString("en-US")}`
+                            : "Permanent ban"}
+                        </div>
+                      </div>
+                      <button onClick={() => unbanUser(b.blocked)}
+                        className="text-green-600 hover:text-green-400 text-xs transition-colors flex-shrink-0">Unban</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* NOTIFICATIONS */}
 {tab === "notifications" && (
   <div className="flex flex-col gap-6 max-w-xl">
@@ -904,6 +1153,25 @@ async function sendBroadcast() {
                 >
                   {gateEnabled ? "🔴 Dezactivează" : "🟢 Activează"}
                 </button>
+              </div>
+
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+                <div className="font-semibold mb-1">Premium Price (SOL/month)</div>
+                <div className="text-zinc-500 text-sm mb-3">Price users pay for 1 month of premium</div>
+                <div className="flex gap-2">
+                  <input
+                    type="number" step="0.01" min="0.01"
+                    value={premiumPrice}
+                    onChange={(e) => setPremiumPrice(e.target.value)}
+                    className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none"
+                  />
+                  <button onClick={async () => {
+                    await supabase.from("app_settings").upsert({ key: "premium_price_sol", value: premiumPrice });
+                    alert("✅ Price updated to " + premiumPrice + " SOL");
+                  }} className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors">
+                    Save
+                  </button>
+                </div>
               </div>
 
               <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">

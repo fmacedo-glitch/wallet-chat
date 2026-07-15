@@ -1,6 +1,9 @@
 "use client";
 import dynamic from "next/dynamic";
 import { useRef } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { Connection, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { supabase } from "../lib/supabase";
 
 const WalletMultiButtonDynamic = dynamic(
   async () => (await import("@solana/wallet-adapter-react-ui")).WalletMultiButton,
@@ -8,19 +11,71 @@ const WalletMultiButtonDynamic = dynamic(
 );
 
 const PREMIUM_WALLET = "3WDy3rzCYY5TpLJAJ6MwhWUoAHrVi7rrxtNhQ5BhizqJ";
-const PREMIUM_AMOUNT = 0.05;
+const HELIUS_KEY = "79a1d2c9-8ab4-4fe1-8ca4-7b49961960fb";
 
 export function TabSettings({
   publicKey, profiles, savedUsername, username, setUsername, saveProfile,
   displayName, setDisplayName, avatarUrl, handleAvatarUpload,
-  isPremium, premiumExpires,
+  isPremium, premiumExpires, setIsPremium, setPremiumExpires,
   walletPrivate, setWalletPrivate,
   messageExpiryDays, saveMessageExpiry,
 }: any) {
+  const { sendTransaction } = useWallet();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function formatExpiry(dateStr: string) {
     return new Date(dateStr).toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" });
+  }
+
+  async function handleGoPremium() {
+    if (!publicKey || !sendTransaction) { alert("Connect your wallet first"); return; }
+
+    // Fetch price from app_settings
+    const { data: priceData } = await supabase.from("app_settings").select("value").eq("key", "premium_price_sol").single();
+    const price = parseFloat(priceData?.value || "0.05");
+
+    try {
+      const connection = new Connection(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`, "confirmed");
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey: new PublicKey(PREMIUM_WALLET),
+          lamports: Math.round(price * LAMPORTS_PER_SOL),
+        })
+      );
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = publicKey;
+
+      // Send transaction - Phantom opens automatically
+      const signature = await sendTransaction(transaction, connection);
+
+      // Wait for confirmation
+      await connection.confirmTransaction(signature, "confirmed");
+
+      // Activate premium for 30 days
+      const expires = new Date();
+      expires.setDate(expires.getDate() + 30);
+
+      const { error } = await supabase.from("profiles").upsert({
+        wallet: publicKey.toBase58(),
+        is_premium: true,
+        premium_expires_at: expires.toISOString(),
+      });
+
+      if (error) { alert("Payment confirmed but activation failed. Contact support with tx: " + signature); return; }
+
+      setIsPremium(true);
+      setPremiumExpires(expires.toISOString());
+      alert(`✅ Premium activated! Valid until ${formatExpiry(expires.toISOString())}\n\nTx: ${signature}`);
+
+    } catch (err: any) {
+      if (err.message?.includes("User rejected")) {
+        // User cancelled - do nothing
+        return;
+      }
+      alert("Error: " + (err.message || "Transaction failed"));
+    }
   }
 
   return (
@@ -71,8 +126,7 @@ export function TabSettings({
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 text-sm">@</span>
               <input value={username} onChange={(e) => setUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
-                placeholder="username_here"
-                maxLength={30}
+                placeholder="username_here" maxLength={30}
                 className="w-full bg-zinc-800 border border-zinc-700 rounded-xl pl-7 pr-4 py-2.5 text-sm focus:outline-none focus:border-zinc-500" />
             </div>
             <div className="text-[10px] text-zinc-600 mt-1">Only letters, numbers and underscores. No spaces.</div>
@@ -93,12 +147,8 @@ export function TabSettings({
               <div className="text-zinc-500 text-xs">Hide your NFTs and tokens from others</div>
               {!isPremium && <div className="text-yellow-500 text-xs mt-0.5">⭐ Premium only</div>}
             </div>
-            <button
-              disabled={!isPremium}
-              onClick={() => setWalletPrivate(!walletPrivate)}
-              className={`w-12 h-6 rounded-full transition-colors ${
-                isPremium ? (walletPrivate ? "bg-green-500" : "bg-zinc-600") : "bg-zinc-700 opacity-50 cursor-not-allowed"
-              }`}>
+            <button disabled={!isPremium} onClick={() => setWalletPrivate(!walletPrivate)}
+              className={`w-12 h-6 rounded-full transition-colors ${isPremium ? (walletPrivate ? "bg-green-500" : "bg-zinc-600") : "bg-zinc-700 opacity-50 cursor-not-allowed"}`}>
               <div className={`w-5 h-5 rounded-full bg-white mx-0.5 transition-transform ${walletPrivate && isPremium ? "translate-x-6" : "translate-x-0"}`} />
             </button>
           </div>
@@ -122,21 +172,18 @@ export function TabSettings({
             </>
           ) : (
             <>
-              <div className="text-zinc-300 text-sm">Unlock premium features for <span className="text-yellow-400 font-bold">0.05 SOL/month</span></div>
-              <div className="flex flex-col gap-1.5 text-xs text-zinc-400">
+              <div className="flex flex-col gap-1.5 text-xs text-zinc-400 mb-1">
                 <div>✅ Verified badge on your profile</div>
                 <div>✅ Private wallet (hide NFTs & tokens)</div>
                 <div>✅ Unlimited profile views (free = 5/day)</div>
                 <div>✅ Priority support</div>
               </div>
-              <div className="bg-zinc-800 rounded-xl p-3 mt-1">
-                <div className="text-xs text-zinc-400 mb-2">Send exactly <span className="text-yellow-400 font-bold">0.05 SOL</span> to:</div>
-                <div className="font-mono text-xs text-white break-all bg-zinc-900 rounded-lg px-3 py-2 select-all">
-                  {PREMIUM_WALLET}
-                </div>
-                <div className="text-[10px] text-zinc-500 mt-2">
-                  Include your wallet address in the memo field. Premium activates within 24h after payment verification.
-                </div>
+              <button onClick={handleGoPremium}
+                className="w-full bg-gradient-to-r from-purple-600 to-green-500 hover:from-purple-500 hover:to-green-400 text-white rounded-xl py-3 text-sm font-bold transition-all shadow-lg">
+                ⭐ Go Premium — 0.05 SOL / month
+              </button>
+              <div className="text-[10px] text-zinc-600 text-center">
+                Phantom opens automatically. Payment is instant and secure on Solana.
               </div>
             </>
           )}
@@ -145,7 +192,6 @@ export function TabSettings({
         {/* Message Expiry */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-col gap-3">
           <div className="font-semibold text-sm text-zinc-400 uppercase tracking-wide">Message Expiry</div>
-          <div className="text-xs text-zinc-500">Messages will be automatically deleted after the selected period</div>
           <select value={messageExpiryDays} onChange={(e) => saveMessageExpiry(Number(e.target.value))}
             className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none">
             <option value={0}>Never</option>
@@ -159,9 +205,7 @@ export function TabSettings({
         {/* Wallet */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-col gap-3">
           <div className="font-semibold text-sm text-zinc-400 uppercase tracking-wide">Wallet</div>
-          {publicKey && (
-            <div className="text-zinc-500 text-xs font-mono break-all">{publicKey.toBase58()}</div>
-          )}
+          {publicKey && <div className="text-zinc-500 text-xs font-mono break-all">{publicKey.toBase58()}</div>}
           <WalletMultiButtonDynamic />
         </div>
 

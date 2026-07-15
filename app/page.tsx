@@ -92,6 +92,8 @@ const [unreadGroups, setUnreadGroups] = useState<Set<string>>(new Set());
   const [dailyViewCount, setDailyViewCount] = useState(0);
   const [viewedProfile, setViewedProfile] = useState<any>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [isBanned, setIsBanned] = useState(false);
+  const [banInfo, setBanInfo] = useState<any>(null);
   const [blockedUsers, setBlockedUsers] = useState<any[]>([]);
   const [blockedByUsers, setBlockedByUsers] = useState<any[]>([]);
   const [profiles, setProfiles] = useState<any>({});
@@ -500,6 +502,29 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     fetchBlockedUsers();
   }
 
+  async function checkBanStatus() {
+    if (!publicKey) return;
+    const { data } = await supabase.from("blocked_users")
+      .select("*")
+      .eq("blocker", "ADMIN")
+      .eq("blocked", publicKey.toBase58())
+      .maybeSingle();
+
+    if (!data) { setIsBanned(false); setBanInfo(null); return; }
+
+    // Check if ban has expired
+    if (data.expires_at && new Date(data.expires_at) < new Date()) {
+      // Ban expired - remove it
+      await supabase.from("blocked_users").delete()
+        .eq("blocker", "ADMIN").eq("blocked", publicKey.toBase58());
+      setIsBanned(false); setBanInfo(null);
+      return;
+    }
+
+    setIsBanned(true);
+    setBanInfo(data);
+  }
+
   function validateUsername(val: string) {
     return /^[a-zA-Z0-9_]{1,30}$/.test(val);
   }
@@ -550,14 +575,11 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
 
   async function handleViewProfile(wallet: string) {
     if (!wallet || wallet === publicKey?.toBase58()) return;
-    if (!isPremium) {
-      const count = await checkDailyViewLimit();
-      if (count >= 5) { alert("You've reached your daily limit of 5 profile views. Upgrade to Premium for unlimited views!"); return; }
-    }
-    const { data: profileData } = await supabase.from("profiles").select("*").eq("wallet", wallet).single();
-    setViewedProfile({ wallet, ...profileData });
-    setShowProfileModal(true);
-    if (!isPremium) await incrementViewCount(wallet);
+    supabase.from("profiles").select("*").eq("wallet", wallet).single().then(({ data }) => {
+      setViewedProfile({ wallet, ...data });
+      setShowProfileModal(true);
+      setShowNFTs(false); setNfts([]); setOtherTokens([]);
+    });
   }
 
   async function handleAvatarUpload(file: File) {
@@ -798,7 +820,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     fetchProfiles(); loadProfile(); fetchPresence();
     checkGateAccess(); loadMessageExpiry();
     fetchNotifications(); loadMyStatus(); fetchGroups();
-    checkPremiumStatus(); checkDailyViewLimit();
+    checkPremiumStatus(); checkDailyViewLimit(); checkBanStatus();
 
     if (!publicKey) return;
     updatePresence();
@@ -840,6 +862,14 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
         setOtherIsTyping(!!someoneTyping);
         if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         if (someoneTyping) typingTimeoutRef.current = setTimeout(() => setOtherIsTyping(false), 3000);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "blocked_users" }, (payload) => {
+        const me = publicKey.toBase58();
+        const record = (payload.new || payload.old) as any;
+        if (record?.blocker === "ADMIN" && record?.blocked === me) {
+          checkBanStatus();
+        }
+        fetchBlockedUsers(); fetchBlockedByUsers();
       })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications" }, (payload) => { const notif = payload.new as any; setActiveNotif(notif); setNotifications((prev) => [notif, ...prev.slice(0, 4)]); })
       .on("postgres_changes", { event: "*", schema: "public", table: "blocked_users" }, () => { fetchBlockedUsers(); fetchBlockedByUsers(); })
@@ -894,15 +924,25 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
             className="bg-green-600 hover:bg-green-500 text-white rounded-xl py-2.5 text-sm font-bold transition-colors col-span-2">
             💬 Send Message
           </button>
-          {!isFriend(viewedProfile.wallet) ? (
-            <button onClick={() => { addFriend(viewedProfile.wallet); setShowProfileModal(false); }}
-              className="bg-zinc-700 hover:bg-zinc-600 text-white rounded-xl py-2.5 text-sm font-bold transition-colors">
-              ➕ Add Friend
-            </button>
-          ) : (
+          {isFriend(viewedProfile.wallet) ? (
             <button onClick={() => { unfriend(viewedProfile.wallet); setShowProfileModal(false); }}
               className="bg-zinc-700 hover:bg-zinc-600 text-white rounded-xl py-2.5 text-sm transition-colors">
-              Remove Friend
+              👥 Friends
+            </button>
+          ) : friendRequests.some((r: any) => r.sender === publicKey?.toBase58() && r.receiver === viewedProfile.wallet && r.accepted === false) ? (
+            <button disabled
+              className="bg-yellow-700/60 text-yellow-300 rounded-xl py-2.5 text-sm cursor-not-allowed opacity-80">
+              ⏳ Request Sent
+            </button>
+          ) : friendRequests.some((r: any) => r.receiver === publicKey?.toBase58() && r.sender === viewedProfile.wallet && r.accepted === false) ? (
+            <button onClick={() => { acceptFriend(friendRequests.find((r: any) => r.sender === viewedProfile.wallet && r.receiver === publicKey?.toBase58())?.id); setShowProfileModal(false); }}
+              className="bg-green-600 hover:bg-green-500 text-white rounded-xl py-2.5 text-sm font-bold transition-colors">
+              ✅ Accept Request
+            </button>
+          ) : (
+            <button onClick={() => { addFriend(viewedProfile.wallet); }}
+              className="bg-zinc-700 hover:bg-zinc-600 text-white rounded-xl py-2.5 text-sm font-bold transition-colors">
+              ➕ Add Friend
             </button>
           )}
           {!isBlocked(viewedProfile.wallet) ? (
@@ -917,7 +957,16 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
             </button>
           )}
           {!viewedProfile.wallet_private ? (
-            <button onClick={() => {
+            <button onClick={async () => {
+                // Check daily limit for free users
+                if (!isPremium) {
+                  const count = await checkDailyViewLimit();
+                  if (count >= 5) {
+                    alert("You've reached your daily limit of 5 wallet views. Upgrade to Premium for unlimited access!");
+                    return;
+                  }
+                  await incrementViewCount(viewedProfile.wallet);
+                }
                 const w = viewedProfile.wallet;
                 setShowProfileModal(false);
                 loadConversation(w);
@@ -926,7 +975,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
                 setTimeout(() => setShowNFTs(true), 100);
               }}
               className="bg-purple-700 hover:bg-purple-600 text-white rounded-xl py-2.5 text-sm transition-colors col-span-2">
-              🖼 View Wallet (NFTs & Tokens)
+              🖼 View Wallet — {isPremium ? "Unlimited" : `${dailyViewCount}/5 today`}
             </button>
           ) : (
             <div className="col-span-2 bg-zinc-800 text-zinc-500 rounded-xl py-2.5 text-sm text-center">
@@ -935,12 +984,41 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
           )}
         </div>
         {!isPremium && (
-          <div className="text-center text-zinc-600 text-xs">{dailyViewCount}/5 free profile views today</div>
+          <div className="text-center text-zinc-600 text-xs">{dailyViewCount}/5 free wallet views today</div>
         )}
         <button onClick={() => setShowProfileModal(false)} className="w-full mt-2 text-zinc-500 hover:text-white text-sm transition-colors">Close</button>
       </div>
     </div>
   ) : null;
+
+  if (isBanned) {
+    return (
+      <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6">
+        <div className="max-w-md w-full bg-zinc-950 border border-red-900 rounded-2xl p-8 text-center">
+          <div className="text-5xl mb-4">🚫</div>
+          <h1 className="text-2xl font-bold mb-2 text-red-400">Account Banned</h1>
+          <p className="text-zinc-400 text-sm mb-4">
+            Your account has been banned from Wallet Chat.
+          </p>
+          {banInfo?.reason && (
+            <div className="bg-zinc-900 rounded-xl px-4 py-3 mb-4 text-sm text-zinc-300">
+              <span className="text-zinc-500">Reason: </span>{banInfo.reason}
+            </div>
+          )}
+          {banInfo?.expires_at ? (
+            <div className="text-zinc-500 text-xs">
+              Ban expires: {new Date(banInfo.expires_at).toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}
+            </div>
+          ) : (
+            <div className="text-zinc-500 text-xs">This is a permanent ban.</div>
+          )}
+          <div className="mt-6">
+            <WalletMultiButtonDynamic />
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   if (gateEnabled && gateAccess === "checking") {
     return (
@@ -1017,7 +1095,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     activeChat, setActiveChat, setActiveTab, profiles, isOnline, getDisplayName, otherIsTyping,
     showSearch, setShowSearch, searchQuery, setSearchQuery, chatMessages, publicKey,
     fetchNFTs, fetchOtherWalletTokens, showNFTs, setShowNFTs, nftWallet, setNftTab, nftTab,
-    isFriend, unfriend, addFriend, isBlocked, blockUser, unblockUser,
+    isFriend, unfriend, addFriend, isBlocked, blockUser, unblockUser, friendRequests,
     loadingNFTs, nfts, loadingOtherTokens, otherTokens,
     messagesContainerRef, hasMoreMessages, loadMoreMessages, loadingMore,
     reactions, selectedMsgs, selectionMode, toggleSelectMsg, toggleReaction, setContextMenu, contextMenu,
@@ -1080,6 +1158,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
           displayName={displayName} setDisplayName={setDisplayName}
           avatarUrl={avatarUrl} handleAvatarUpload={handleAvatarUpload}
           isPremium={isPremium} premiumExpires={premiumExpires}
+          setIsPremium={setIsPremium} setPremiumExpires={setPremiumExpires}
           walletPrivate={walletPrivate} setWalletPrivate={setWalletPrivate}
           messageExpiryDays={messageExpiryDays} saveMessageExpiry={saveMessageExpiry} />
       )}
