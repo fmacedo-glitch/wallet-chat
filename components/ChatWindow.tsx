@@ -12,7 +12,7 @@ export function ChatWindow({
   isFriend, unfriend, addFriend, isBlocked, blockUser, unblockUser, friendRequests,
   loadingNFTs, nfts, loadingOtherTokens, otherTokens,
   hasMoreMessages, loadMoreMessages, loadingMore,
-  reactions, selectedMsgs, selectionMode, toggleSelectMsg, toggleReaction, setContextMenu, contextMenu,
+  reactions, selectedMsgs, selectionMode, setSelectionMode, toggleSelectMsg, toggleReaction, setContextMenu, contextMenu,
   ContextMenuUI, clearSelection, showDeleteConfirm, setShowDeleteConfirm, deleteSelected,
   amIBlocked, didIBlock, showSendSol, setShowSendSol, loadingTokens, walletTokens,
   selectedToken, setSelectedToken, solAmount, setSolAmount, sendSol, sendingSol, fetchWalletTokens,
@@ -50,9 +50,19 @@ export function ChatWindow({
             <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-black ${isOnline(activeChat) ? "bg-green-400" : "bg-zinc-600"}`} />
           </div>
           <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleViewProfile(activeChat)}>
-            <div className="text-white font-semibold text-sm flex items-center gap-1">
-              {getDisplayName(activeChat)}
+            <div className="text-white font-semibold text-sm flex items-center gap-1.5 flex-wrap">
+              <span>{getDisplayName(activeChat)}</span>
               {profiles[activeChat]?.is_premium && <span className="text-green-400 text-xs">✅</span>}
+              {profiles[activeChat]?.rank_title && (
+                <span className="text-[10px] bg-purple-500/20 border border-purple-400/30 text-purple-300 font-extrabold px-1.5 py-0.5 rounded-full">
+                  {profiles[activeChat]?.rank_title}
+                </span>
+              )}
+              {profiles[activeChat]?.play_points !== undefined && (
+                <span className="text-[10px] text-amber-400 font-extrabold">
+                  🪙 {profiles[activeChat]?.play_points}
+                </span>
+              )}
             </div>
             <div className="text-xs text-zinc-500">
               {otherIsTyping ? <span className="text-green-400 animate-pulse">typing...</span>
@@ -147,8 +157,9 @@ export function ChatWindow({
           <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-sm w-full mx-4" onClick={(e) => e.stopPropagation()}>
             <div className="text-lg font-bold text-white mb-2">Delete messages?</div>
             <div className="text-zinc-400 text-sm mb-6">{showDeleteConfirm === "all" ? `Delete ${selectedMsgs.size} message(s) for everyone?` : `Delete ${selectedMsgs.size} message(s) for you only?`}</div>
-            <div className="flex gap-3">
+            <div className="flex gap-2">
               <button onClick={() => setShowDeleteConfirm(null)} className="flex-1 bg-zinc-800 text-white py-2.5 rounded-xl text-sm">Cancel</button>
+              <button onClick={() => { setShowDeleteConfirm(null); setSelectionMode?.(true); }} className="flex-1 bg-zinc-700 text-zinc-200 py-2.5 rounded-xl text-sm font-medium">☑️ Select</button>
               <button onClick={() => deleteSelected(showDeleteConfirm)} className="flex-1 bg-red-600 text-white py-2.5 rounded-xl text-sm font-bold">Delete</button>
             </div>
           </div>

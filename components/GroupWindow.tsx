@@ -12,7 +12,7 @@ export function GroupWindow({
   message, handleMessageInput, textareaRef, showEmojiPicker, setShowEmojiPicker,
   replyTo, setReplyTo, autoResize, setMessage, sendGroupMessage, fetchGroups,
   contextMenu, setContextMenu, toggleReaction, reactions, copyMessage,
-  selectedMsgs, selectionMode, toggleSelectMsg, clearSelection,
+  selectedMsgs, selectionMode, setSelectionMode, toggleSelectMsg, clearSelection,
   showDeleteConfirm, setShowDeleteConfirm, deleteSelected,
   handleViewProfile, loadConversation,
 }: any) {
@@ -80,7 +80,19 @@ export function GroupWindow({
                     <Avatar wallet={m.wallet} profile={profiles[m.wallet]} size={28} />
                   </div>
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleViewProfile && handleViewProfile(m.wallet)}>
-                    <div className="text-white text-xs font-medium hover:text-green-400 transition-colors">{getDisplayName(m.wallet)}</div>
+                    <div className="text-white text-xs font-medium hover:text-green-400 transition-colors flex items-center gap-1 flex-wrap">
+                      <span>{getDisplayName(m.wallet)}</span>
+                      {profiles[m.wallet]?.rank_title && (
+                        <span className="text-[9px] bg-purple-500/20 border border-purple-400/30 text-purple-300 font-extrabold px-1.5 py-0.2 rounded-full">
+                          {profiles[m.wallet]?.rank_title}
+                        </span>
+                      )}
+                      {profiles[m.wallet]?.play_points !== undefined && (
+                        <span className="text-[9px] text-amber-400 font-extrabold">
+                          🪙{profiles[m.wallet]?.play_points}
+                        </span>
+                      )}
+                    </div>
                     {m.role === "owner" && <div className="text-yellow-500 text-[10px]">Admin</div>}
                   </div>
                   {m.wallet !== publicKey?.toBase58() && (
@@ -232,7 +244,7 @@ export function GroupWindow({
                     </div>
                   )}
                   {msg.deleted_for_all ? (
-                    <div className="px-3 py-2 rounded-2xl bg-zinc-800/50 border border-zinc-700 text-zinc-500 text-xs italic">🚫 Deleted</div>
+                    <div className="px-3 py-2 rounded-2xl bg-zinc-800/50 border border-zinc-700 text-zinc-500 text-xs italic">🚫 Message deleted</div>
                   ) : (
                     <div className={`px-3 py-2 rounded-2xl break-words text-sm max-w-full ${
                       selectedMsgs?.has(msg.id)
@@ -288,12 +300,14 @@ export function GroupWindow({
                     className="text-lg hover:bg-zinc-800 rounded p-0.5">{e}</button>
                 ))}
               </div>
+              <div className="h-px bg-zinc-800 mx-2 my-1" />
+              <button onClick={() => { setContextMenu(null); setSelectionMode?.(true); if (!selectedMsgs?.has(msg.id)) toggleSelectMsg(msg.id); }}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-zinc-200 font-medium">☑️ Select</button>
+              <button onClick={() => { setContextMenu(null); setSelectionMode?.(true); if (!selectedMsgs?.has(msg.id)) toggleSelectMsg(msg.id); setShowDeleteConfirm("me"); }}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 For me</button>
               {isMine && (
-                <>
-                  <div className="h-px bg-zinc-800 mx-2 my-1" />
-                  <button onClick={() => { setContextMenu(null); toggleSelectMsg(msg.id); }}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 Delete</button>
-                </>
+                <button onClick={() => { setContextMenu(null); setSelectionMode?.(true); if (!selectedMsgs?.has(msg.id)) toggleSelectMsg(msg.id); setShowDeleteConfirm("all"); }}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 For everyone</button>
               )}
             </div>
           </>
@@ -301,27 +315,42 @@ export function GroupWindow({
       })()}
 
       {/* Selection toolbar */}
-      {selectionMode && (
-        <div className="flex items-center justify-between bg-zinc-800 border-t border-zinc-700 px-4 py-2 flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-white font-medium">{selectedMsgs?.size} selected</span>
-            <button onClick={clearSelection} className="text-xs text-zinc-400">Cancel</button>
+      {selectionMode && (() => {
+        const allSelectedMine = Array.from(selectedMsgs || []).every((id) => {
+          const m = groupMessages.find((msg: any) => msg.id === id);
+          return m && m.sender === publicKey?.toBase58();
+        });
+        return (
+          <div className="flex items-center justify-between bg-zinc-800 border-t border-zinc-700 px-4 py-2 flex-shrink-0">
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-white font-medium">{selectedMsgs?.size} selected</span>
+              <button onClick={clearSelection} className="text-xs text-zinc-400">Cancel</button>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setShowDeleteConfirm("me")} disabled={!selectedMsgs?.size}
+                className="bg-zinc-700 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-40">🗑 For me</button>
+              {allSelectedMine && (
+                <button onClick={() => setShowDeleteConfirm("all")} disabled={!selectedMsgs?.size}
+                  className="bg-red-700 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-40">🗑 For all</button>
+              )}
+            </div>
           </div>
-          <div className="flex gap-2">
-            <button onClick={() => setShowDeleteConfirm("all")} disabled={!selectedMsgs?.size}
-              className="bg-red-700 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-40">🗑 Delete</button>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Delete confirm */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowDeleteConfirm(null)}>
           <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-sm w-full mx-4" onClick={(e) => e.stopPropagation()}>
             <div className="text-lg font-bold text-white mb-2">Delete messages?</div>
-            <div className="text-zinc-400 text-sm mb-6">Delete {selectedMsgs?.size} message(s) for everyone?</div>
-            <div className="flex gap-3">
+            <div className="text-zinc-400 text-sm mb-6">
+              {showDeleteConfirm === "all"
+                ? `Delete ${selectedMsgs?.size || 1} message(s) for everyone?`
+                : `Delete ${selectedMsgs?.size || 1} message(s) for you only?`}
+            </div>
+            <div className="flex gap-2">
               <button onClick={() => setShowDeleteConfirm(null)} className="flex-1 bg-zinc-800 text-white py-2.5 rounded-xl text-sm">Cancel</button>
+              <button onClick={() => { setShowDeleteConfirm(null); setSelectionMode?.(true); }} className="flex-1 bg-zinc-700 text-zinc-200 py-2.5 rounded-xl text-sm font-medium">☑️ Select</button>
               <button onClick={() => deleteSelected(showDeleteConfirm)} className="flex-1 bg-red-600 text-white py-2.5 rounded-xl text-sm font-bold">Delete</button>
             </div>
           </div>

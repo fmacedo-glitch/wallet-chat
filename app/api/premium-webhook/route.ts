@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://ibosxmdvalbqxjftfrlj.supabase.co",
+  process.env.SUPABASE_SERVICE_ROLE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlib3N4bWR2YWxicXhqZnRmcmxqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExNzQ2ODcsImV4cCI6MjA5Njc1MDY4N30.HVvrMu7uLSoXcVu6vjCvlTA24-wn6AJlvvMYrWE-hXc"
 );
 
 const PREMIUM_WALLET = "3WDy3rzCYY5TpLJAJ6MwhWUoAHrVi7rrxtNhQ5BhizqJ";

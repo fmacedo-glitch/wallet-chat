@@ -15,6 +15,7 @@ import { TabChats } from "../components/TabChats";
 import { TabFriends } from "../components/TabFriends";
 import { TabGroups } from "../components/TabGroups";
 import { TabSettings } from "../components/TabSettings";
+import { TabPlay } from "../components/TabPlay";
 import { ChatWindow } from "../components/ChatWindow";
 import { GroupWindow } from "../components/GroupWindow";
 import { BottomNav } from "../components/BottomNav";
@@ -58,7 +59,7 @@ export default function Home() {
   const [showSearch, setShowSearch] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ msgId: string; x: number; y: number } | null>(null);
   const [replyTo, setReplyTo] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<"chats" | "friends" | "groups" | "settings">("chats");
+  const [activeTab, setActiveTab] = useState<"chats" | "friends" | "groups" | "play" | "settings">("chats");
   const [groups, setGroups] = useState<any[]>([]);
   const [activeGroup, setActiveGroup] = useState<any>(null);
   const [groupMessages, setGroupMessages] = useState<any[]>([]);
@@ -199,23 +200,37 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     setSelectedMsgs((prev) => { const next = new Set(prev); if (next.has(msgId)) next.delete(msgId); else next.add(msgId); return next; });
   }
 
-  function clearSelection() { setSelectedMsgs(new Set()); setSelectionMode(false); }
+  function clearSelection() { setSelectedMsgs(new Set()); setSelectionMode(false); setShowDeleteConfirm(null); setContextMenu(null); }
 
   function copyMessage(content: string) { navigator.clipboard.writeText(content); setContextMenu(null); }
 
   async function deleteSelected(mode: "me" | "all") {
     if (!publicKey) return;
-    for (const msgId of Array.from(selectedMsgs)) {
-      if (mode === "all") {
-        await supabase.from("messages").update({ deleted_for_all: true, deleted_at: new Date().toISOString() }).eq("id", msgId);
-      } else {
-        const msg = chatMessages.find((m: any) => m.id === msgId);
-        if (!msg) continue;
-        const field = msg.sender === publicKey.toBase58() ? "deleted_for_sender" : "deleted_for_receiver";
-        await supabase.from("messages").update({ [field]: true, deleted_at: new Date().toISOString() }).eq("id", msgId);
+    const selectedIds = Array.from(selectedMsgs);
+    if (!selectedIds.length) return;
+
+    if (activeGroupRef.current || activeGroup) {
+      for (const msgId of selectedIds) {
+        if (mode === "all") {
+          const { error } = await supabase.from("group_messages").update({ deleted_for_all: true, deleted_at: new Date().toISOString() }).eq("id", msgId);
+          if (error) {
+            await supabase.from("group_messages").delete().eq("id", msgId);
+          }
+        }
       }
-      // Always show as "Message deleted" placeholder
-      setChatMessages((prev: any[]) => prev.map((m: any) => m.id === msgId ? { ...m, deleted_for_all: true } : m));
+      setGroupMessages((prev: any[]) => prev.map((m: any) => selectedIds.includes(m.id) ? { ...m, deleted_for_all: true } : m));
+    } else {
+      for (const msgId of selectedIds) {
+        if (mode === "all") {
+          await supabase.from("messages").update({ deleted_for_all: true, deleted_at: new Date().toISOString() }).eq("id", msgId);
+        } else {
+          const msg = chatMessages.find((m: any) => m.id === msgId);
+          if (!msg) continue;
+          const field = msg.sender === publicKey.toBase58() ? "deleted_for_sender" : "deleted_for_receiver";
+          await supabase.from("messages").update({ [field]: true, deleted_at: new Date().toISOString() }).eq("id", msgId);
+        }
+        setChatMessages((prev: any[]) => prev.map((m: any) => m.id === msgId ? { ...m, deleted_for_all: true } : m));
+      }
     }
     clearSelection(); setShowDeleteConfirm(null);
   }
@@ -300,6 +315,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
   }
 
   async function openGroup(group: any) {
+    clearSelection();
     setActiveGroup(group); setActiveChat("");
     setUnreadGroups((prev) => { const next = new Set(prev); next.delete(group.id); return next; });
     loadGroupMessages(group.id); fetchGroupMembers(group.id);
@@ -770,7 +786,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     if (!msg) return;
     const field = msg.sender === publicKey.toBase58() ? "deleted_for_sender" : "deleted_for_receiver";
     await supabase.from("messages").update({ [field]: true, deleted_at: new Date().toISOString() }).eq("id", msgId);
-    setChatMessages((prev: any[]) => prev.filter((m: any) => m.id !== msgId));
+    setChatMessages((prev: any[]) => prev.map((m: any) => m.id === msgId ? { ...m, deleted_for_all: true } : m));
   }
 
   async function deleteMessageForAll(msgId: string) {
@@ -803,6 +819,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
 
   async function loadConversation(wallet: string) {
     if (!wallet) return;
+    clearSelection();
     if (!publicKey) { setActiveChat(wallet); return; }
     setActiveChat(wallet); setActiveGroup(null);
     setShowNFTs(false);
@@ -883,7 +900,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
         const me = publicKey.toBase58();
         if (updated.seen === true) setChatMessages((prev) => prev.map((m: any) => m.id === updated.id ? { ...m, seen: true } : m));
         if (updated.deleted_for_all === true) setChatMessages((prev) => prev.map((m: any) => m.id === updated.id ? { ...m, deleted_for_all: true } : m));
-        if ((updated.deleted_for_sender === true && updated.sender === me) || (updated.deleted_for_receiver === true && updated.receiver === me)) setChatMessages((prev) => prev.filter((m: any) => m.id !== updated.id));
+        if ((updated.deleted_for_sender === true && updated.sender === me) || (updated.deleted_for_receiver === true && updated.receiver === me)) setChatMessages((prev) => prev.map((m: any) => m.id === updated.id ? { ...m, deleted_for_all: true } : m));
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "reactions" }, (payload) => { const r = (payload.new || payload.old) as any; if (r?.message_id) fetchReactions([r.message_id]); })
       .on("postgres_changes", { event: "*", schema: "public", table: "typing" }, async () => {
@@ -913,6 +930,18 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     setUnreadGroups((prev) => new Set([...prev, msg.group_id]));
   }
       })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "group_messages" }, (payload) => {
+        const updated = payload.new as any;
+        if (updated?.id) {
+          setGroupMessages((prev) => prev.map((m: any) => m.id === updated.id ? { ...m, ...updated } : m));
+        }
+      })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "group_messages" }, (payload) => {
+        const deleted = payload.old as any;
+        if (deleted?.id) {
+          setGroupMessages((prev) => prev.filter((m: any) => m.id !== deleted.id));
+        }
+      })
       .subscribe();
 
     return () => {
@@ -922,6 +951,10 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
       sendTyping(false);
     };
   }, [publicKey]);
+
+  useEffect(() => {
+    clearSelection();
+  }, [activeChat, activeGroup?.id, activeTab]);
 
   const amIBlocked = activeChat ? isBlockedByThem(activeChat) : false;
   const didIBlock = activeChat ? isBlocked(activeChat) : false;
@@ -943,6 +976,15 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
                 {viewedProfile.display_name || (viewedProfile.username ? `@${viewedProfile.username}` : `${viewedProfile.wallet?.slice(0, 6)}...`)}
               </div>
               {viewedProfile.is_premium && <span className="text-green-400 text-sm">✅</span>}
+            </div>
+            {/* Rank Title & Points */}
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs bg-purple-500/20 border border-purple-400/30 text-purple-300 font-extrabold px-2.5 py-0.5 rounded-full">
+                {viewedProfile.rank_title || "Novice"}
+              </span>
+              <span className="text-xs text-amber-400 font-extrabold">
+                🪙 {viewedProfile.play_points !== undefined ? viewedProfile.play_points : (viewedProfile.wallet === publicKey?.toBase58() ? (typeof window !== "undefined" ? localStorage.getItem("play_points") || "100" : "100") : "100")} Monede
+              </span>
             </div>
             {viewedProfile.display_name && viewedProfile.username && (
               <div className="text-zinc-400 text-sm">@{viewedProfile.username}</div>
@@ -1115,10 +1157,12 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
             ))}
           </div>
           <div className="h-px bg-zinc-800 mx-2 my-1" />
-          <button onClick={() => { setContextMenu(null); setSelectionMode(true); toggleSelectMsg(msg.id); setShowDeleteConfirm("me"); }}
+          <button onClick={() => { setContextMenu(null); setSelectionMode(true); if (!selectedMsgs.has(msg.id)) toggleSelectMsg(msg.id); }}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-zinc-200 font-medium">☑️ Select</button>
+          <button onClick={() => { setContextMenu(null); setSelectionMode(true); if (!selectedMsgs.has(msg.id)) toggleSelectMsg(msg.id); setShowDeleteConfirm("me"); }}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 Delete for me</button>
           {msg.sender === publicKey?.toBase58() && (
-            <button onClick={() => { setContextMenu(null); setSelectionMode(true); toggleSelectMsg(msg.id); setShowDeleteConfirm("all"); }}
+            <button onClick={() => { setContextMenu(null); setSelectionMode(true); if (!selectedMsgs.has(msg.id)) toggleSelectMsg(msg.id); setShowDeleteConfirm("all"); }}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 Delete for everyone</button>
           )}
         </div>
@@ -1134,7 +1178,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     isFriend, unfriend, addFriend, isBlocked, blockUser, unblockUser, friendRequests,
     loadingNFTs, nfts, loadingOtherTokens, otherTokens,
     messagesContainerRef, hasMoreMessages, loadMoreMessages, loadingMore,
-    reactions, selectedMsgs, selectionMode, toggleSelectMsg, toggleReaction, setContextMenu, contextMenu,
+    reactions, selectedMsgs, selectionMode, setSelectionMode, toggleSelectMsg, toggleReaction, setContextMenu, contextMenu,
     ContextMenuUI, clearSelection, showDeleteConfirm, setShowDeleteConfirm, deleteSelected,
     amIBlocked, didIBlock, showSendSol, setShowSendSol, loadingTokens, walletTokens,
     selectedToken, setSelectedToken, solAmount, setSolAmount, sendSol, sendingSol, fetchWalletTokens,
@@ -1152,7 +1196,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     message, handleMessageInput, textareaRef, showEmojiPicker, setShowEmojiPicker,
     replyTo, setReplyTo, autoResize, setMessage, sendGroupMessage, fetchGroups,
     contextMenu, setContextMenu, toggleReaction, reactions, copyMessage,
-    selectedMsgs, selectionMode, toggleSelectMsg, clearSelection,
+    selectedMsgs, selectionMode, setSelectionMode, toggleSelectMsg, clearSelection,
     showDeleteConfirm, setShowDeleteConfirm, deleteSelected,
     handleViewProfile, loadConversation,
   };
@@ -1199,6 +1243,9 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
           walletPrivate={walletPrivate} setWalletPrivate={setWalletPrivate}
           messageExpiryDays={messageExpiryDays} saveMessageExpiry={saveMessageExpiry} />
       )}
+      {activeTab === "play" && !activeChat && !activeGroup && (
+        <TabPlay publicKey={publicKey} profiles={profiles} getDisplayName={getDisplayName} />
+      )}
       {activeChat && <ChatWindow {...chatWindowProps} />}
       {activeGroup && !activeChat && <GroupWindow {...groupWindowProps} />}
     </>
@@ -1216,6 +1263,31 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
           <div className="px-4 py-3 border-b border-zinc-800 flex items-center gap-2">
             <div className="text-lg font-bold flex-1">Wallet Chat</div>
             <WalletMultiButtonDynamic />
+          </div>
+          {/* Desktop "Play" Category Button Above Other Categories */}
+          <div className="p-2.5 border-b border-zinc-800 bg-zinc-950/80">
+            <button
+              onClick={() => {
+                setActiveChat("");
+                setActiveGroup(null);
+                setActiveTab("play");
+              }}
+              className={`w-full py-2 px-3 rounded-xl font-extrabold text-xs tracking-wider flex items-center justify-between transition-all duration-200 shadow-md ${
+                activeTab === "play"
+                  ? "bg-gradient-to-r from-purple-600 via-fuchsia-600 to-pink-500 text-white shadow-purple-900/50 ring-2 ring-purple-400/50"
+                  : "bg-gradient-to-r from-purple-950/90 via-fuchsia-950/80 to-pink-950/70 hover:from-purple-900 hover:to-pink-900 text-purple-200 border border-purple-500/40"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-base">🎮</span>
+                <span className="uppercase font-black text-xs">
+                  Play Arena
+                </span>
+              </div>
+              <span className="bg-purple-500/30 border border-purple-400/30 text-purple-200 text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-widest">
+                Games
+              </span>
+            </button>
           </div>
           <div className="flex border-b border-zinc-800">
             {([
@@ -1304,6 +1376,43 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
                     </div>
                   </button>
                 ))}
+              </div>
+            )}
+            {activeTab === "play" && (
+              <div className="p-3 flex flex-col gap-2">
+                <div className="text-xs text-purple-400 font-bold uppercase tracking-wider px-1">Play Arena Games</div>
+                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setActiveTab("play"); }}
+                  className="bg-purple-900/30 border border-purple-800/40 hover:border-purple-600/60 rounded-xl p-3 text-left transition-colors flex items-center gap-3 cursor-pointer">
+                  <span className="text-2xl">🪙</span>
+                  <div>
+                    <div className="text-white text-sm font-bold">Solana Coin Flip</div>
+                    <div className="text-purple-300/70 text-xs">Double or Nothing</div>
+                  </div>
+                </button>
+                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setActiveTab("play"); }}
+                  className="bg-pink-900/30 border border-pink-800/40 hover:border-pink-600/60 rounded-xl p-3 text-left transition-colors flex items-center gap-3 cursor-pointer">
+                  <span className="text-2xl">🎡</span>
+                  <div>
+                    <div className="text-white text-sm font-bold">Lucky Spin Wheel</div>
+                    <div className="text-pink-300/70 text-xs">Daily Point Rewards</div>
+                  </div>
+                </button>
+                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setActiveTab("play"); }}
+                  className="bg-cyan-900/30 border border-cyan-800/40 hover:border-cyan-600/60 rounded-xl p-3 text-left transition-colors flex items-center gap-3 cursor-pointer">
+                  <span className="text-2xl">🧠</span>
+                  <div>
+                    <div className="text-white text-sm font-bold">Crypto Quiz</div>
+                    <div className="text-cyan-300/70 text-xs">Web3 Trivia</div>
+                  </div>
+                </button>
+                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setActiveTab("play"); }}
+                  className="bg-emerald-900/30 border border-emerald-800/40 hover:border-emerald-600/60 rounded-xl p-3 text-left transition-colors flex items-center gap-3 cursor-pointer">
+                  <span className="text-2xl">✂️</span>
+                  <div>
+                    <div className="text-white text-sm font-bold">Rock-Paper-Scissors</div>
+                    <div className="text-emerald-300/70 text-xs">AI Duel</div>
+                  </div>
+                </button>
               </div>
             )}
           </div>
