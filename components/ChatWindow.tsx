@@ -19,6 +19,7 @@ export function ChatWindow({
   message, handleMessageInput, textareaRef, showEmojiPicker, setShowEmojiPicker,
   replyTo, setReplyTo, autoResize, setMessage, sendMessage,
   handleViewProfile, getUserBadge, isPremium,
+  clearConversation, deleteMessageForMe, deleteMessageForAll,
 }: any) {
   // Internal scroll ref
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -135,7 +136,9 @@ export function ChatWindow({
           </div>
           <div className="flex gap-2">
             <button onClick={() => setShowDeleteConfirm("me")} disabled={selectedMsgs.size === 0} className="bg-zinc-700 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-40">🗑 For me</button>
-            <button onClick={() => setShowDeleteConfirm("all")} disabled={selectedMsgs.size === 0} className="bg-red-700 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-40">🗑 For all</button>
+            {chatMessages.filter((m: any) => selectedMsgs.has(m.id)).every((m: any) => m.sender === publicKey?.toBase58()) && (
+              <button onClick={() => setShowDeleteConfirm("all")} disabled={selectedMsgs.size === 0} className="bg-red-700 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-40">🗑 For all</button>
+            )}
           </div>
         </div>
       )}

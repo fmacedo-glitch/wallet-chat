@@ -27,6 +27,11 @@ export function TabSettings({
     return new Date(dateStr).toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" });
   }
 
+  function daysUntilExpiry(dateStr: string) {
+    const diff = new Date(dateStr).getTime() - new Date().getTime();
+    return Math.ceil(diff / (1000 * 60 * 60 * 24));
+  }
+
   async function handleGoPremium() {
     if (!publicKey || !sendTransaction) { alert("Connect your wallet first"); return; }
 
@@ -162,13 +167,34 @@ export function TabSettings({
           {isPremium ? (
             <>
               <div className="text-green-400 text-sm font-medium">Your premium is active!</div>
-              {premiumExpires && <div className="text-zinc-400 text-xs">Expires: {formatExpiry(premiumExpires)}</div>}
+              {premiumExpires && (
+                <>
+                  <div className="text-zinc-400 text-xs">Expires: {formatExpiry(premiumExpires)}</div>
+                  {daysUntilExpiry(premiumExpires) <= 7 && daysUntilExpiry(premiumExpires) > 0 && (
+                    <div className="bg-yellow-900/50 border border-yellow-700 rounded-lg px-3 py-2 text-xs text-yellow-300">
+                      ⚠️ Your premium expires in {daysUntilExpiry(premiumExpires)} day{daysUntilExpiry(premiumExpires) !== 1 ? "s" : ""}! Renew now to keep your benefits.
+                    </div>
+                  )}
+                  {daysUntilExpiry(premiumExpires) <= 0 && (
+                    <div className="bg-red-900/50 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">
+                      ❌ Your premium has expired. Renew to restore your benefits.
+                    </div>
+                  )}
+                </>
+              )}
               <div className="flex flex-col gap-1.5 text-xs text-zinc-300">
                 <div>✅ Verified badge on your profile</div>
                 <div>✅ Private wallet mode</div>
-                <div>✅ Unlimited profile views</div>
+                <div>✅ Unlimited wallet views</div>
                 <div>✅ Priority support</div>
               </div>
+              {/* Renew button if expiring soon */}
+              {premiumExpires && daysUntilExpiry(premiumExpires) <= 7 && (
+                <button onClick={handleGoPremium}
+                  className="w-full bg-gradient-to-r from-purple-600 to-green-500 hover:from-purple-500 hover:to-green-400 text-white rounded-xl py-2.5 text-sm font-bold transition-all">
+                  🔄 Renew Premium — 0.05 SOL
+                </button>
+              )}
             </>
           ) : (
             <>
@@ -183,7 +209,7 @@ export function TabSettings({
                 ⭐ Go Premium — 0.05 SOL / month
               </button>
               <div className="text-[10px] text-zinc-600 text-center">
-                Phantom opens automatically. Payment is instant and secure on Solana.
+                Phantom opens automatically. Premium activates instantly after payment confirmation.
               </div>
             </>
           )}

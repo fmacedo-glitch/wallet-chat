@@ -208,14 +208,14 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     for (const msgId of Array.from(selectedMsgs)) {
       if (mode === "all") {
         await supabase.from("messages").update({ deleted_for_all: true, deleted_at: new Date().toISOString() }).eq("id", msgId);
-        setChatMessages((prev: any[]) => prev.map((m: any) => m.id === msgId ? { ...m, deleted_for_all: true } : m));
       } else {
         const msg = chatMessages.find((m: any) => m.id === msgId);
         if (!msg) continue;
         const field = msg.sender === publicKey.toBase58() ? "deleted_for_sender" : "deleted_for_receiver";
         await supabase.from("messages").update({ [field]: true, deleted_at: new Date().toISOString() }).eq("id", msgId);
-        setChatMessages((prev: any[]) => prev.filter((m: any) => m.id !== msgId));
       }
+      // Always show as "Message deleted" placeholder
+      setChatMessages((prev: any[]) => prev.map((m: any) => m.id === msgId ? { ...m, deleted_for_all: true } : m));
     }
     clearSelection(); setShowDeleteConfirm(null);
   }
@@ -748,6 +748,37 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     } catch { setGateAccess("allowed"); }
   }
 
+  async function clearConversation(wallet: string) {
+    if (!publicKey || !wallet) return;
+    if (!confirm("Delete this conversation? It will be removed from your chat list.")) return;
+    const me = publicKey.toBase58();
+    const { data } = await supabase.from("messages").select("id, sender, receiver")
+      .or(`and(sender.eq.${me},receiver.eq.${wallet}),and(sender.eq.${wallet},receiver.eq.${me})`);
+    if (data?.length) {
+      for (const msg of data) {
+        const field = msg.sender === me ? "deleted_for_sender" : "deleted_for_receiver";
+        await supabase.from("messages").update({ [field]: true, deleted_at: new Date().toISOString() }).eq("id", msg.id);
+      }
+    }
+    setInboxMessages((prev: any[]) => prev.filter((m: any) => m.otherWallet !== wallet));
+    setChatMessages([]);
+  }
+
+  async function deleteMessageForMe(msgId: string) {
+    if (!publicKey) return;
+    const msg = chatMessages.find((m: any) => m.id === msgId);
+    if (!msg) return;
+    const field = msg.sender === publicKey.toBase58() ? "deleted_for_sender" : "deleted_for_receiver";
+    await supabase.from("messages").update({ [field]: true, deleted_at: new Date().toISOString() }).eq("id", msgId);
+    setChatMessages((prev: any[]) => prev.filter((m: any) => m.id !== msgId));
+  }
+
+  async function deleteMessageForAll(msgId: string) {
+    if (!publicKey) return;
+    await supabase.from("messages").update({ deleted_for_all: true, deleted_at: new Date().toISOString() }).eq("id", msgId);
+    setChatMessages((prev: any[]) => prev.map((m: any) => m.id === msgId ? { ...m, deleted_for_all: true } : m));
+  }
+
   async function sendMessage() {
     if (!publicKey) { alert("Connect wallet first"); return; }
     if (!activeChat || !message.trim()) return;
@@ -787,11 +818,11 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
       .order("created_at", { ascending: false }).limit(50);
     if (error) { console.error(error); return; }
     const me = publicKey.toBase58();
-    const msgs = (data || []).filter((m: any) => {
-      if (m.deleted_for_all) return true;
-      if (m.sender === me && m.deleted_for_sender) return false;
-      if (m.receiver === me && m.deleted_for_receiver) return false;
-      return true;
+    const msgs = (data || []).map((m: any) => {
+      // If deleted for me, show as deleted placeholder
+      if (m.sender === me && m.deleted_for_sender) return { ...m, deleted_for_all: true };
+      if (m.receiver === me && m.deleted_for_receiver) return { ...m, deleted_for_all: true };
+      return m;
     }).reverse();
     setChatMessages(msgs); setHasMoreMessages(msgs.length === 50);
     await markMessagesAsSeen(wallet);
@@ -1084,7 +1115,12 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
             ))}
           </div>
           <div className="h-px bg-zinc-800 mx-2 my-1" />
-          <button onClick={() => { setContextMenu(null); setSelectionMode(true); toggleSelectMsg(msg.id); }} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 Delete</button>
+          <button onClick={() => { setContextMenu(null); setSelectionMode(true); toggleSelectMsg(msg.id); setShowDeleteConfirm("me"); }}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 Delete for me</button>
+          {msg.sender === publicKey?.toBase58() && (
+            <button onClick={() => { setContextMenu(null); setSelectionMode(true); toggleSelectMsg(msg.id); setShowDeleteConfirm("all"); }}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 text-sm text-red-400">🗑 Delete for everyone</button>
+          )}
         </div>
       </>
     );
@@ -1105,6 +1141,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     message, handleMessageInput, textareaRef, showEmojiPicker, setShowEmojiPicker,
     replyTo, setReplyTo, autoResize, setMessage, sendMessage,
     handleViewProfile, getUserBadge, isPremium,
+    deleteMessageForMe, deleteMessageForAll, clearConversation,
   };
 
   const groupWindowProps = {
@@ -1132,7 +1169,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
       {activeTab === "chats" && !activeChat && !activeGroup && (
         <TabChats receiver={receiver} setReceiver={setReceiver} loadConversation={loadConversation}
           inboxMessages={inboxMessages} profiles={profiles} isOnline={isOnline} unreadCounts={unreadCounts}
-          getDisplayName={getDisplayName} formatInboxTime={formatInboxTime} handleViewProfile={handleViewProfile} />
+          getDisplayName={getDisplayName} formatInboxTime={formatInboxTime} handleViewProfile={handleViewProfile} clearConversation={clearConversation} />
       )}
       {activeTab === "friends" && !activeChat && !activeGroup && (
         <TabFriends friendRequests={friendRequests} publicKey={publicKey} profiles={profiles}
@@ -1206,29 +1243,33 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
                   <button onClick={() => { loadConversation(receiver); setReceiver(""); }} className="bg-green-600 text-white rounded-lg px-3 text-sm font-bold">Open</button>
                 </div>
                 {inboxMessages.map((msg) => (
-                  <button key={msg.otherWallet} onClick={() => loadConversation(msg.otherWallet)}
-                    className={`border rounded-lg p-3 text-left transition-colors ${
-                      activeChat === msg.otherWallet || unreadCounts[msg.otherWallet] > 0
-                        ? "bg-zinc-800 border-green-800"
-                        : "bg-zinc-900 border-zinc-800"
-                    }`}>
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-shrink-0">
-                        <Avatar wallet={msg.otherWallet} profile={profiles[msg.otherWallet]} size={36} />
-                        <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-zinc-900 ${isOnline(msg.otherWallet) ? "bg-green-400" : "bg-zinc-600"}`} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between">
-                          <div className="text-white text-sm font-medium truncate">{getDisplayName(msg.otherWallet)}</div>
-                          <div className="text-[10px] text-zinc-500">{formatInboxTime(msg.created_at)}</div>
+                  <div key={msg.otherWallet} className="group relative flex items-center border rounded-lg transition-colors cursor-pointer
+                      ${activeChat === msg.otherWallet || unreadCounts[msg.otherWallet] > 0 ? 'bg-zinc-800 border-green-800' : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'}">
+                    <div className={`flex-1 p-3 text-left ${activeChat === msg.otherWallet || unreadCounts[msg.otherWallet] > 0 ? "bg-zinc-800 border-green-800" : "bg-zinc-900 border-zinc-800 hover:border-zinc-700"} border rounded-lg transition-colors`}
+                      onClick={() => loadConversation(msg.otherWallet)}>
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-shrink-0">
+                          <Avatar wallet={msg.otherWallet} profile={profiles[msg.otherWallet]} size={36} />
+                          <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-zinc-900 ${isOnline(msg.otherWallet) ? "bg-green-400" : "bg-zinc-600"}`} />
                         </div>
-                        <div className="flex items-center gap-1">
-                          <div className="truncate text-xs text-zinc-400">{msg.content}</div>
-                          {unreadCounts[msg.otherWallet] > 0 && <div className="min-w-4 h-4 px-1 rounded-full bg-green-600 text-white text-[9px] flex items-center justify-center">{unreadCounts[msg.otherWallet]}</div>}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <div className="text-white text-sm font-medium truncate">{getDisplayName(msg.otherWallet)}</div>
+                            <div className="flex items-center gap-1.5">
+                              <div className="text-[10px] text-zinc-500">{formatInboxTime(msg.created_at)}</div>
+                              <div onClick={(e) => { e.stopPropagation(); clearConversation(msg.otherWallet); }}
+                                className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-400 transition-all text-xs px-1 cursor-pointer"
+                                title="Delete">✕</div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <div className="truncate text-xs text-zinc-400">{msg.content}</div>
+                            {unreadCounts[msg.otherWallet] > 0 && <div className="min-w-4 h-4 px-1 rounded-full bg-green-600 text-white text-[9px] flex items-center justify-center">{unreadCounts[msg.otherWallet]}</div>}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
