@@ -3,6 +3,7 @@ import { Avatar } from "./Avatar";
 import { EmojiPicker } from "./EmojiPicker";
 import { ChatInput } from "./ChatInput";
 import { supabase } from "../lib/supabase";
+import { parseUTCDate, formatMessageTime, getMessageDateKey } from "../lib/dateUtils";
 
 export function GroupWindow({
   activeGroup, setActiveGroup, setActiveTab, groupMembers, showGroupInfo, setShowGroupInfo,
@@ -202,15 +203,15 @@ export function GroupWindow({
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1 min-h-0">
         {groupMessages.map((msg: any, i: number) => {
           const isMine = msg.sender === publicKey?.toBase58();
-          const msgDate = new Date(msg.created_at).toDateString();
-          const prevDate = i > 0 ? new Date(groupMessages[i - 1].created_at).toDateString() : null;
+          const msgDate = getMessageDateKey(msg.created_at);
+          const prevDate = i > 0 ? getMessageDateKey(groupMessages[i - 1].created_at) : null;
           const showDateSep = msgDate !== prevDate;
           return (
             <div key={msg.id}>
               {showDateSep && (
                 <div className="flex items-center gap-2 my-3">
                   <div className="flex-1 h-px bg-zinc-800" />
-                  <div className="text-[10px] text-zinc-600">{new Date(msg.created_at).toLocaleDateString("en-US", { day: "numeric", month: "long" })}</div>
+                  <div className="text-[10px] text-zinc-600">{parseUTCDate(msg.created_at).toLocaleDateString([], { day: "numeric", month: "long" })}</div>
                   <div className="flex-1 h-px bg-zinc-800" />
                 </div>
               )}
@@ -273,7 +274,7 @@ export function GroupWindow({
                       ))}
                     </div>
                   )}
-                  <div className="text-[10px] text-zinc-600 px-1">{new Date(msg.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</div>
+                  <div className="text-[10px] text-zinc-600 px-1">{formatMessageTime(msg.created_at)}</div>
                 </div>
               </div>
             </div>

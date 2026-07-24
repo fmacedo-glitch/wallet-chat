@@ -5,7 +5,7 @@ export function TabGroups({
   searchGroupResults, groups, openGroup, requestJoinGroup, publicKey,
   showCreateGroup, newGroupName, setNewGroupName, newGroupDesc, setNewGroupDesc,
   groupIsPublic, setGroupIsPublic, groupRequiresApproval, setGroupRequiresApproval,
-  friends, profiles, getDisplayName, createGroup, creatingGroup, unreadGroups,
+  friends, profiles, getDisplayName, createGroup, creatingGroup, unreadGroupCounts,
 }: any) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -63,30 +63,39 @@ export function TabGroups({
             <button onClick={() => setShowCreateGroup(true)} className="bg-green-600 hover:bg-green-500 text-white rounded-xl px-6 py-3 text-sm font-bold transition-colors">Create Group</button>
           </div>
         )}
-        {groups.map((group: any) => (
-          <button key={group.id} onClick={() => openGroup(group)}
-            className={`border rounded-xl p-3 text-left hover:border-zinc-700 transition-colors ${
-              unreadGroups?.has(group.id) ? "bg-zinc-800 border-zinc-700" : "bg-zinc-900 border-zinc-800"
-            }`}>
-            <div className="flex items-center gap-3">
-              <div className="relative flex-shrink-0">
-                <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-lg"
-                  style={{ background: `linear-gradient(135deg, ${group.avatar_color}, #14F195)` }}>
-                {group.name.slice(0, 1).toUpperCase()}
+        {groups.map((group: any) => {
+          const count = unreadGroupCounts?.[group.id] || 0;
+          return (
+            <button key={group.id} onClick={() => openGroup(group)}
+              className={`border rounded-xl p-3 text-left hover:border-zinc-700 transition-colors ${
+                count > 0 ? "bg-zinc-800/90 border-green-800" : "bg-zinc-900 border-zinc-800"
+              }`}>
+              <div className="flex items-center gap-3">
+                <div className="relative flex-shrink-0">
+                  <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-lg"
+                    style={{ background: `linear-gradient(135deg, ${group.avatar_color}, #14F195)` }}>
+                    {group.name.slice(0, 1).toUpperCase()}
+                  </div>
+                  {count > 0 && (
+                    <div className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-green-600 text-white text-[10px] font-bold flex items-center justify-center border-2 border-zinc-900 shadow">
+                      {count > 99 ? "99+" : count}
+                    </div>
+                  )}
                 </div>
-                {unreadGroups?.has(group.id) && (
-                  <div className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-red-500 border-2 border-zinc-900" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-white text-sm font-semibold">{group.name}</div>
+                  <div className="text-zinc-500 text-xs truncate">{group.description || "No description"}</div>
+                </div>
+                {group.owner === publicKey?.toBase58() && <div className="text-[10px] text-yellow-500 font-bold flex-shrink-0">ADMIN</div>}
+                {count > 0 && (
+                  <div className="min-w-5 h-5 px-1.5 rounded-full bg-green-600 text-white text-xs font-bold flex items-center justify-center flex-shrink-0 shadow">
+                    {count > 99 ? "99+" : count}
+                  </div>
                 )}
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-white text-sm font-semibold">{group.name}</div>
-                <div className="text-zinc-500 text-xs truncate">{group.description || "No description"}</div>
-              </div>
-              {group.owner === publicKey?.toBase58() && <div className="text-[10px] text-yellow-500 font-bold flex-shrink-0">ADMIN</div>}
-              {unreadGroups?.has(group.id) && <div className="w-2.5 h-2.5 rounded-full bg-red-500 flex-shrink-0" />}
-            </div>
-          </button>
-        ))}
+            </button>
+          );
+        })}
       </div>
       {showCreateGroup && (
         <div className="fixed inset-0 bg-black/70 flex items-end md:items-center justify-center z-50" onClick={() => setShowCreateGroup(false)}>

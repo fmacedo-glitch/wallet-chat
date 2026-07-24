@@ -1,4 +1,5 @@
-export function BottomNav({ unreadCounts, friendRequests, publicKey, activeTab, setActiveTab, setActiveChat, setActiveGroup, unreadGroups }: any) {
+export function BottomNav({ unreadCounts, unreadGroupCounts, friendRequests, publicKey, activeTab, setActiveTab, setActiveChat, setActiveGroup }: any) {
+  const groupBadge = Object.values(unreadGroupCounts || {}).reduce((a: number, b: any) => a + (Number(b) || 0), 0);
   return (
     <div className="flex-shrink-0 border-t border-zinc-800 bg-zinc-950 flex items-center justify-around px-1 py-2">
       {([
@@ -18,7 +19,7 @@ export function BottomNav({ unreadCounts, friendRequests, publicKey, activeTab, 
           key: "groups",
           icon: "🏠",
           label: "Groups",
-          badge: unreadGroups?.size || 0,
+          badge: groupBadge,
         },
         {
           key: "settings",
@@ -49,7 +50,9 @@ export function BottomNav({ unreadCounts, friendRequests, publicKey, activeTab, 
           <span className="text-xl">{tab.icon}</span>
           <span className="text-[10px] font-medium">{tab.label}</span>
           {tab.badge > 0 && (
-            <div className="absolute -top-0.5 right-1 w-2.5 h-2.5 rounded-full bg-red-500" />
+            <div className="absolute -top-1 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center border border-zinc-950">
+              {tab.badge > 99 ? "99+" : tab.badge}
+            </div>
           )}
         </button>
       ))}

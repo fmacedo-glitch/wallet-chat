@@ -1,10 +1,12 @@
+import { parseUTCDate, formatMessageTime, getMessageDateKey } from "../lib/dateUtils";
+
 export function ChatMessages({ messages, publicKey, reactions, selectedMsgs, selectionMode, toggleSelectMsg, toggleReaction, setContextMenu, contextMenu, getDisplayName }: any) {
   return (
     <>
       {messages.map((msg: any, i: number) => {
         const isMine = msg.sender === publicKey?.toBase58();
-        const msgDate = new Date(msg.created_at).toDateString();
-        const prevDate = i > 0 ? new Date(messages[i - 1].created_at).toDateString() : null;
+        const msgDate = getMessageDateKey(msg.created_at);
+        const prevDate = i > 0 ? getMessageDateKey(messages[i - 1].created_at) : null;
         const showDateSep = msgDate !== prevDate;
         const msgReactions = reactions[msg.id] || {};
         const isSelected = selectedMsgs.has(msg.id);
@@ -13,7 +15,7 @@ export function ChatMessages({ messages, publicKey, reactions, selectedMsgs, sel
             {showDateSep && (
               <div className="flex items-center gap-2 my-3">
                 <div className="flex-1 h-px bg-zinc-800" />
-                <div className="text-[10px] text-zinc-600">{new Date(msg.created_at).toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}</div>
+                <div className="text-[10px] text-zinc-600">{parseUTCDate(msg.created_at).toLocaleDateString([], { day: "numeric", month: "long", year: "numeric" })}</div>
                 <div className="flex-1 h-px bg-zinc-800" />
               </div>
             )}
@@ -58,7 +60,7 @@ export function ChatMessages({ messages, publicKey, reactions, selectedMsgs, sel
                 )}
                 {!msg.deleted_for_all && (
                   <div className={`flex items-center gap-1 px-1 ${isMine ? "flex-row-reverse" : ""}`}>
-                    <div className="text-[10px] text-zinc-600">{new Date(msg.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</div>
+                    <div className="text-[10px] text-zinc-600">{formatMessageTime(msg.created_at)}</div>
                     {isMine && i === messages.length - 1 && (
                       <div className={`text-[10px] font-bold ${msg.seen ? "text-green-400" : "text-zinc-600"}`}>{msg.seen ? "✓✓" : "✓"}</div>
                     )}

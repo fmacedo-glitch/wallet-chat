@@ -6,6 +6,7 @@ import { useEffect, useState, useRef } from "react";
 import { Connection, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
 import { supabase } from "../lib/supabase";
+import { parseUTCDate } from "../lib/dateUtils";
 import { Avatar } from "../components/Avatar";
 import { TypingIndicator } from "../components/TypingIndicator";
 import { EmojiPicker } from "../components/EmojiPicker";
@@ -60,6 +61,8 @@ export default function Home() {
   const [contextMenu, setContextMenu] = useState<{ msgId: string; x: number; y: number } | null>(null);
   const [replyTo, setReplyTo] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<"chats" | "friends" | "groups" | "play" | "settings">("chats");
+  const [playSelectedSubTab, setPlaySelectedSubTab] = useState<"hub" | "daily" | "pvp" | "games" | "shop" | "admin" | undefined>(undefined);
+  const [playSelectedSingleGame, setPlaySelectedSingleGame] = useState<"rps" | "coinflip" | "spin" | undefined>(undefined);
   const [groups, setGroups] = useState<any[]>([]);
   const [activeGroup, setActiveGroup] = useState<any>(null);
   const [groupMessages, setGroupMessages] = useState<any[]>([]);
@@ -74,7 +77,7 @@ export default function Home() {
   const [groupIsPublic, setGroupIsPublic] = useState(true);
   const [groupRequiresApproval, setGroupRequiresApproval] = useState(false);
   const [groupRequests, setGroupRequests] = useState<any[]>([]);
-const [unreadGroups, setUnreadGroups] = useState<Set<string>>(new Set());
+  const [unreadGroupCounts, setUnreadGroupCounts] = useState<Record<string, number>>({});
 
 
   const [searchGroupQuery, setSearchGroupQuery] = useState("");
@@ -129,7 +132,8 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
   }
 
   function formatInboxTime(timestamp: string) {
-    const date = new Date(timestamp);
+    if (!timestamp) return "";
+    const date = parseUTCDate(timestamp);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / 60000);
@@ -137,9 +141,9 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     const diffDays = Math.floor(diffMs / 86400000);
     if (diffMins < 1) return "now";
     if (diffMins < 60) return `${diffMins}m`;
-    if (diffHours < 24) return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-    if (diffDays < 7) return date.toLocaleDateString("en-US", { weekday: "short" });
-    return date.toLocaleDateString("en-US", { day: "numeric", month: "short" });
+    if (diffHours < 24) return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (diffDays < 7) return date.toLocaleDateString([], { weekday: "short" });
+    return date.toLocaleDateString([], { day: "numeric", month: "short" });
   }
 
   function isOnline(wallet: string) { return onlineUsers.has(wallet); }
@@ -317,7 +321,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
   async function openGroup(group: any) {
     clearSelection();
     setActiveGroup(group); setActiveChat("");
-    setUnreadGroups((prev) => { const next = new Set(prev); next.delete(group.id); return next; });
+    setUnreadGroupCounts((prev) => ({ ...prev, [group.id]: 0 }));
     loadGroupMessages(group.id); fetchGroupMembers(group.id);
     if (group.owner === publicKey?.toBase58()) fetchGroupRequests(group.id);
   }
@@ -813,8 +817,16 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
     const { data, error } = await supabase.from("messages").select("*").or(`sender.eq.${publicKey.toBase58()},receiver.eq.${publicKey.toBase58()}`).order("created_at", { ascending: false });
     if (error) { console.error(error); return; }
     const latestMessages = new Map();
-    data?.forEach((msg) => { const otherWallet = msg.sender === publicKey.toBase58() ? msg.receiver : msg.sender; if (!latestMessages.has(otherWallet)) latestMessages.set(otherWallet, { ...msg, otherWallet }); });
+    const counts: Record<string, number> = {};
+    data?.forEach((msg) => {
+      const otherWallet = msg.sender === publicKey.toBase58() ? msg.receiver : msg.sender;
+      if (!latestMessages.has(otherWallet)) latestMessages.set(otherWallet, { ...msg, otherWallet });
+      if (msg.sender === otherWallet && msg.receiver === publicKey.toBase58() && !msg.seen) {
+        counts[otherWallet] = (counts[otherWallet] || 0) + 1;
+      }
+    });
     setInboxMessages(Array.from(latestMessages.values()));
+    setUnreadCounts(counts);
   }
 
   async function loadConversation(wallet: string) {
@@ -884,9 +896,12 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
         if (newMessage.receiver === me) {
           const { data: profileData } = await supabase.from("profiles").select("*").eq("wallet", newMessage.sender).maybeSingle();
           if (profileData) setProfiles((prev: any) => ({ ...prev, [profileData.wallet]: profileData }));
-          if (newMessage.sender === activeChatRef.current) supabase.from("messages").update({ seen: true }).eq("id", newMessage.id);
+          if (newMessage.sender === activeChatRef.current) {
+            supabase.from("messages").update({ seen: true }).eq("id", newMessage.id);
+          } else {
+            setUnreadCounts((prevCounts: any) => ({ ...prevCounts, [newMessage.sender]: (prevCounts[newMessage.sender] || 0) + 1 }));
+          }
           setInboxMessages((prev) => {
-            if (newMessage.sender !== activeChatRef.current) setUnreadCounts((prevCounts: any) => ({ ...prevCounts, [newMessage.sender]: (prevCounts[newMessage.sender] || 0) + 1 }));
             const filtered = prev.filter((m) => m.otherWallet !== newMessage.sender);
             return [{ ...newMessage, otherWallet: newMessage.sender }, ...filtered];
           });
@@ -924,11 +939,14 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
       .on("postgres_changes", { event: "*", schema: "public", table: "friends" }, () => { fetchFriends(); fetchFriendRequests(); })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "profiles" }, (payload) => { const updated = payload.new as any; if (updated?.wallet) setProfiles((prev: any) => ({ ...prev, [updated.wallet]: { ...prev[updated.wallet], ...updated } })); })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "group_messages" }, (payload) => {
-  const msg = payload.new as any;
-  if (activeGroupRef.current && msg.group_id === activeGroupRef.current.id) setGroupMessages((prev) => { if (prev.find((m: any) => m.id === msg.id)) return prev; return [...prev, msg]; });
-  if (!activeGroupRef.current || msg.group_id !== activeGroupRef.current.id) {
-    setUnreadGroups((prev) => new Set([...prev, msg.group_id]));
-  }
+        const msg = payload.new as any;
+        const me = publicKey?.toBase58();
+        if (activeGroupRef.current && msg.group_id === activeGroupRef.current.id) {
+          setGroupMessages((prev) => { if (prev.find((m: any) => m.id === msg.id)) return prev; return [...prev, msg]; });
+        }
+        if (msg.sender !== me && (!activeGroupRef.current || msg.group_id !== activeGroupRef.current.id)) {
+          setUnreadGroupCounts((prev) => ({ ...prev, [msg.group_id]: (prev[msg.group_id] || 0) + 1 }));
+        }
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "group_messages" }, (payload) => {
         const updated = payload.new as any;
@@ -1231,7 +1249,8 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
           newGroupDesc={newGroupDesc} setNewGroupDesc={setNewGroupDesc} groupIsPublic={groupIsPublic}
           setGroupIsPublic={setGroupIsPublic} groupRequiresApproval={groupRequiresApproval}
           setGroupRequiresApproval={setGroupRequiresApproval} friends={friends} profiles={profiles}
-          getDisplayName={getDisplayName} createGroup={createGroup} creatingGroup={creatingGroup} />
+          getDisplayName={getDisplayName} createGroup={createGroup} creatingGroup={creatingGroup}
+          unreadGroupCounts={unreadGroupCounts} />
       )}
       {activeTab === "settings" && !activeChat && !activeGroup && (
         <TabSettings publicKey={publicKey} profiles={profiles} savedUsername={savedUsername}
@@ -1244,7 +1263,13 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
           messageExpiryDays={messageExpiryDays} saveMessageExpiry={saveMessageExpiry} />
       )}
       {activeTab === "play" && !activeChat && !activeGroup && (
-        <TabPlay publicKey={publicKey} profiles={profiles} getDisplayName={getDisplayName} />
+        <TabPlay
+          publicKey={publicKey}
+          profiles={profiles}
+          getDisplayName={getDisplayName}
+          selectedSubTab={playSelectedSubTab}
+          selectedSingleGame={playSelectedSingleGame}
+        />
       )}
       {activeChat && <ChatWindow {...chatWindowProps} />}
       {activeGroup && !activeChat && <GroupWindow {...groupWindowProps} />}
@@ -1270,6 +1295,8 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
               onClick={() => {
                 setActiveChat("");
                 setActiveGroup(null);
+                setPlaySelectedSubTab("hub");
+                setPlaySelectedSingleGame(undefined);
                 setActiveTab("play");
               }}
               className={`w-full py-2 px-3 rounded-xl font-extrabold text-xs tracking-wider flex items-center justify-between transition-all duration-200 shadow-md ${
@@ -1281,7 +1308,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
               <div className="flex items-center gap-2">
                 <span className="text-base">🎮</span>
                 <span className="uppercase font-black text-xs">
-                  Play Arena
+                  Play
                 </span>
               </div>
               <span className="bg-purple-500/30 border border-purple-400/30 text-purple-200 text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-widest">
@@ -1293,7 +1320,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
             {([
               { key: "chats", label: "Chats", badge: (Object.values(unreadCounts) as number[]).reduce((a, b) => a + b, 0) },
               { key: "friends", label: "Friends", badge: friendRequests.filter((r: any) => r.receiver === publicKey?.toBase58()).length },
-              { key: "groups", label: "Groups", badge: 0 },
+              { key: "groups", label: "Groups", badge: Object.values(unreadGroupCounts || {}).reduce((a: number, b: any) => a + (Number(b) || 0), 0) },
             ] as const).map((t) => (
               <button key={t.key} onClick={() => { if (t.key === "friends" || t.key === "groups") { setActiveChat(""); setActiveGroup(null); } setActiveTab(t.key); }}
                 className={`flex-1 py-2 text-xs font-medium capitalize transition-colors relative ${activeTab === t.key ? "text-green-400 border-b-2 border-green-400" : "text-zinc-500 hover:text-white"}`}>
@@ -1381,7 +1408,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
             {activeTab === "play" && (
               <div className="p-3 flex flex-col gap-2">
                 <div className="text-xs text-purple-400 font-bold uppercase tracking-wider px-1">Play Arena Games</div>
-                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setActiveTab("play"); }}
+                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setPlaySelectedSubTab("games"); setPlaySelectedSingleGame("coinflip"); setActiveTab("play"); }}
                   className="bg-purple-900/30 border border-purple-800/40 hover:border-purple-600/60 rounded-xl p-3 text-left transition-colors flex items-center gap-3 cursor-pointer">
                   <span className="text-2xl">🪙</span>
                   <div>
@@ -1389,7 +1416,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
                     <div className="text-purple-300/70 text-xs">Double or Nothing</div>
                   </div>
                 </button>
-                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setActiveTab("play"); }}
+                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setPlaySelectedSubTab("games"); setPlaySelectedSingleGame("spin"); setActiveTab("play"); }}
                   className="bg-pink-900/30 border border-pink-800/40 hover:border-pink-600/60 rounded-xl p-3 text-left transition-colors flex items-center gap-3 cursor-pointer">
                   <span className="text-2xl">🎡</span>
                   <div>
@@ -1397,20 +1424,20 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
                     <div className="text-pink-300/70 text-xs">Daily Point Rewards</div>
                   </div>
                 </button>
-                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setActiveTab("play"); }}
+                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setPlaySelectedSubTab("pvp"); setActiveTab("play"); }}
                   className="bg-cyan-900/30 border border-cyan-800/40 hover:border-cyan-600/60 rounded-xl p-3 text-left transition-colors flex items-center gap-3 cursor-pointer">
-                  <span className="text-2xl">🧠</span>
+                  <span className="text-2xl">❌⭕</span>
                   <div>
-                    <div className="text-white text-sm font-bold">Crypto Quiz</div>
-                    <div className="text-cyan-300/70 text-xs">Web3 Trivia</div>
+                    <div className="text-white text-sm font-bold">Tic-Tac-Toe Arena</div>
+                    <div className="text-cyan-300/70 text-xs">Creează Masă PvP</div>
                   </div>
                 </button>
-                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setActiveTab("play"); }}
+                <button onClick={() => { setActiveChat(""); setActiveGroup(null); setPlaySelectedSubTab("pvp"); setActiveTab("play"); }}
                   className="bg-emerald-900/30 border border-emerald-800/40 hover:border-emerald-600/60 rounded-xl p-3 text-left transition-colors flex items-center gap-3 cursor-pointer">
-                  <span className="text-2xl">✂️</span>
+                  <span className="text-2xl">⚔️</span>
                   <div>
                     <div className="text-white text-sm font-bold">Rock-Paper-Scissors</div>
-                    <div className="text-emerald-300/70 text-xs">AI Duel</div>
+                    <div className="text-emerald-300/70 text-xs">AI & Player Duel</div>
                   </div>
                 </button>
               </div>
@@ -1430,7 +1457,7 @@ useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
       <div className="flex md:hidden flex-col flex-1 overflow-hidden">
         {mainContent}
         {!activeChat && !activeGroup && (
-          <BottomNav unreadCounts={unreadCounts} friendRequests={friendRequests} publicKey={publicKey}
+          <BottomNav unreadCounts={unreadCounts} unreadGroupCounts={unreadGroupCounts} friendRequests={friendRequests} publicKey={publicKey}
             activeTab={activeTab} setActiveTab={setActiveTab} setActiveChat={setActiveChat} setActiveGroup={setActiveGroup} />
         )}
       </div>

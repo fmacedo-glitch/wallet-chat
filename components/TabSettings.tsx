@@ -4,6 +4,7 @@ import { useRef } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { Connection, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { supabase } from "../lib/supabase";
+import { parseUTCDate } from "../lib/dateUtils";
 
 const WalletMultiButtonDynamic = dynamic(
   async () => (await import("@solana/wallet-adapter-react-ui")).WalletMultiButton,
@@ -24,11 +25,11 @@ export function TabSettings({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function formatExpiry(dateStr: string) {
-    return new Date(dateStr).toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" });
+    return parseUTCDate(dateStr).toLocaleDateString([], { day: "numeric", month: "long", year: "numeric" });
   }
 
   function daysUntilExpiry(dateStr: string) {
-    const diff = new Date(dateStr).getTime() - new Date().getTime();
+    const diff = parseUTCDate(dateStr).getTime() - new Date().getTime();
     return Math.ceil(diff / (1000 * 60 * 60 * 24));
   }
 

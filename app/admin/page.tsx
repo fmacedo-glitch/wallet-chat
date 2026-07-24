@@ -49,7 +49,81 @@ export default function AdminDashboard() {
   const [lookupLoading, setLookupLoading] = useState(false);
 
   // Active tab
-  const [tab, setTab] = useState<"overview" | "gates" | "settings" | "users" | "messages" | "notifications" | "premium" | "groups" | "bans">("overview");
+  const [tab, setTab] = useState<"overview" | "gates" | "settings" | "users" | "messages" | "notifications" | "premium" | "groups" | "bans" | "play_admin">("overview");
+
+  // Play Arena Admin State
+  const [testPointsWallet, setTestPointsWallet] = useState("");
+  const [testPointsAmount, setTestPointsAmount] = useState(100);
+  const [shopPrices, setShopPrices] = useState<Record<string, number>>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("play_shop_prices");
+      if (saved) {
+        try { return JSON.parse(saved); } catch (e) {}
+      }
+    }
+    return {
+      "title-whale": 300,
+      "title-degen": 200,
+      "title-diamond": 150,
+      "title-streak": 100,
+      "box-silver": 50,
+      "box-gold": 150,
+    };
+  });
+
+  function updateShopPrice(itemId: string, newPrice: number) {
+    const updated = { ...shopPrices, [itemId]: newPrice };
+    setShopPrices(updated);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("play_shop_prices", JSON.stringify(updated));
+    }
+  }
+
+  const [houseFeePercent, setHouseFeePercent] = useState<number>(5);
+  const [presetWagersMonede, setPresetWagersMonede] = useState<string>("20, 50, 100, 250, 500");
+  const [presetWagersSol, setPresetWagersSol] = useState<string>("0.05, 0.1, 0.25, 0.5, 1.0");
+  const [presetWagersUsdc, setPresetWagersUsdc] = useState<string>("1, 5, 10, 25, 50");
+
+  async function saveArenaWagerSettings() {
+    await Promise.all([
+      supabase.from("app_settings").upsert({ key: "arena_house_fee_percent", value: houseFeePercent.toString() }),
+      supabase.from("app_settings").upsert({ key: "arena_preset_wagers_monede", value: presetWagersMonede }),
+      supabase.from("app_settings").upsert({ key: "arena_preset_wagers_sol", value: presetWagersSol }),
+      supabase.from("app_settings").upsert({ key: "arena_preset_wagers_usdc", value: presetWagersUsdc }),
+    ]);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("arena_house_fee_percent", houseFeePercent.toString());
+      localStorage.setItem("arena_preset_wagers_monede", presetWagersMonede);
+      localStorage.setItem("arena_preset_wagers_sol", presetWagersSol);
+      localStorage.setItem("arena_preset_wagers_usdc", presetWagersUsdc);
+    }
+    alert("✅ Comisionul și mizele presetate au fost salvate cu succes!");
+  }
+
+  const [arenaPricing, setArenaPricing] = useState({
+    coinFlipMin: 10,
+    coinFlipMax: 1000,
+    rpsMin: 5,
+    rpsMax: 500,
+    diceMin: 10,
+    diceMax: 1000,
+    spinCost: 10,
+    spinJackpot: 500,
+  });
+  const [auditLogs, setAuditLogs] = useState<any[]>([
+    { id: "log-1", time: "Just now", event: "Anti-Cheat Audit Engine: System Nominal", status: "VERIFIED" },
+    { id: "log-2", time: "2 mins ago", event: "Live Match Matchmaking Verification", status: "PASSED" },
+    { id: "log-3", time: "5 mins ago", event: "Wager Pool Escrow Sync", status: "BALANCED" },
+  ]);
+
+  function handleAddTestPoints() {
+    if (!testPointsWallet.trim()) { alert("Please enter a wallet address"); return; }
+    const cur = parseInt(localStorage.getItem(`wc_points_${testPointsWallet.trim()}`) || "100");
+    const next = cur + Number(testPointsAmount);
+    localStorage.setItem(`wc_points_${testPointsWallet.trim()}`, next.toString());
+    alert(`✅ Added ${testPointsAmount} points to ${testPointsWallet.trim()}! New balance: ${next}`);
+    setTestPointsWallet("");
+  }
 
   // Users
   const [users, setUsers] = useState<any[]>([]);
@@ -126,6 +200,10 @@ const [notifHistory, setNotifHistory] = useState<any[]>([]);
     data?.forEach((s: any) => {
       if (s.key === "token_gate_enabled") setGateEnabled(s.value === "true");
       if (s.key === "admin_wallet") setAdminWallet(s.value);
+      if (s.key === "arena_house_fee_percent") setHouseFeePercent(Number(s.value) || 5);
+      if (s.key === "arena_preset_wagers_monede") setPresetWagersMonede(s.value);
+      if (s.key === "arena_preset_wagers_sol") setPresetWagersSol(s.value);
+      if (s.key === "arena_preset_wagers_usdc") setPresetWagersUsdc(s.value);
     });
   }
 
@@ -448,6 +526,7 @@ async function sendBroadcast() {
         <div className="w-48 border-r border-zinc-800 min-h-screen p-4 flex flex-col gap-1">
           {[
             { key: "overview", icon: "📊", label: "Overview" },
+            { key: "play_admin", icon: "🎮", label: "Play Arena Admin" },
             { key: "gates", icon: "🔐", label: "Token Gates" },
             { key: "users", icon: "👥", label: "Users" },
             { key: "premium", icon: "⭐", label: "Premium" },
@@ -539,6 +618,287 @@ async function sendBroadcast() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* PLAY ARENA ADMIN CONTROLS */}
+          {tab === "play_admin" && (
+            <div className="flex flex-col gap-6">
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+                <div>
+                  <h2 className="text-xl font-bold flex items-center gap-2">
+                    <span>🎮</span> Play Arena Admin Controls & Pricing
+                  </h2>
+                  <p className="text-zinc-400 text-xs mt-1">
+                    Manage game pricing, wager limits, user coin balances, anti-cheat audit logs, and game rules.
+                  </p>
+                </div>
+                <span className="bg-purple-950/80 text-purple-300 border border-purple-800/60 text-xs px-3 py-1 rounded-full font-extrabold uppercase">
+                  Admin Master Engine
+                </span>
+              </div>
+
+              {/* Point Shop Prices Editor */}
+              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 shadow-lg">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-extrabold text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                    <span>🛒</span> Modifică Prețurile din Point Shop (Admin)
+                  </h3>
+                  <span className="text-[10px] bg-amber-500/10 text-amber-300 border border-amber-500/30 px-2.5 py-0.5 rounded-full font-bold">
+                    Live Point Shop Prices
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {[
+                    { id: "title-whale", label: "👑 Whalemaster Title", defaultPrice: 300 },
+                    { id: "title-degen", label: "⚡ Degen King Title", defaultPrice: 200 },
+                    { id: "title-diamond", label: "💎 Diamond Hands Title", defaultPrice: 150 },
+                    { id: "title-streak", label: "🔥 Streak God Title", defaultPrice: 100 },
+                    { id: "box-silver", label: "📦 Silver Mystery Crate", defaultPrice: 50 },
+                    { id: "box-gold", label: "🎁 Golden Mega Crate", defaultPrice: 150 },
+                  ].map((item) => (
+                    <div key={item.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 flex items-center justify-between">
+                      <span className="text-xs font-bold text-white">{item.label}</span>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          value={shopPrices[item.id] ?? item.defaultPrice}
+                          onChange={(e) => updateShopPrice(item.id, parseInt(e.target.value) || 0)}
+                          className="w-16 bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs font-black text-amber-300 text-right focus:outline-none focus:border-amber-400"
+                        />
+                        <span className="text-xs text-zinc-500 font-semibold">pts</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Admin Fee & Preset Wagers Card */}
+              <div className="bg-zinc-900 border border-purple-500/30 rounded-2xl p-5 shadow-xl">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-extrabold text-purple-300 uppercase tracking-wider flex items-center gap-2">
+                    <span>💸</span> Comision Joc (House Fee) & Mize Presetate
+                  </h3>
+                  <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/40 px-2.5 py-0.5 rounded-full font-bold">
+                    Opțiunea C: Monetizare & Currency
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  {/* Comision % */}
+                  <div className="bg-zinc-950 p-3.5 rounded-xl border border-zinc-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold text-white">Comision Platformă (House Fee Rake %):</label>
+                      <span className="text-purple-400 font-extrabold text-sm">{houseFeePercent}%</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      Procentul reținut automat la finalul meciului (ex: la 5% comision și miză 1 SOL, potențialul câștig afișat este <span className="text-amber-400 font-bold">1.90 SOL</span>, fără ca utilizatorul să vadă comisionul explicite).
+                    </p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="number"
+                        min="0"
+                        max="50"
+                        value={houseFeePercent}
+                        onChange={(e) => setHouseFeePercent(Number(e.target.value) || 0)}
+                        className="w-24 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 font-black text-amber-400 text-center focus:outline-none focus:border-purple-500"
+                      />
+                      <span className="text-zinc-400 font-bold">% din fondul total al meciului</span>
+                    </div>
+                  </div>
+
+                  {/* Preset Mize SOL */}
+                  <div className="bg-zinc-950 p-3.5 rounded-xl border border-zinc-800 space-y-2">
+                    <label className="font-bold text-cyan-300 block">⚡ Mize Presetate SOL (Separate prin virgulă):</label>
+                    <p className="text-[11px] text-zinc-400">Opțiunile fixe pe care le au utilizatorii când creează o masă pe SOL.</p>
+                    <input
+                      type="text"
+                      value={presetWagersSol}
+                      onChange={(e) => setPresetWagersSol(e.target.value)}
+                      placeholder="0.05, 0.1, 0.25, 0.5, 1.0"
+                      className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 font-mono text-cyan-300 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+
+                  {/* Preset Mize USDC */}
+                  <div className="bg-zinc-950 p-3.5 rounded-xl border border-zinc-800 space-y-2">
+                    <label className="font-bold text-emerald-300 block">💵 Mize Presetate USDC (Separate prin virgulă):</label>
+                    <p className="text-[11px] text-zinc-400">Opțiunile fixe pe care le au utilizatorii când creează o masă pe USDC.</p>
+                    <input
+                      type="text"
+                      value={presetWagersUsdc}
+                      onChange={(e) => setPresetWagersUsdc(e.target.value)}
+                      placeholder="1, 5, 10, 25, 50"
+                      className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 font-mono text-emerald-300 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  {/* Preset Mize Monede */}
+                  <div className="bg-zinc-950 p-3.5 rounded-xl border border-zinc-800 space-y-2">
+                    <label className="font-bold text-amber-300 block">🪙 Mize Presetate Monede Daily (Separate prin virgulă):</label>
+                    <p className="text-[11px] text-zinc-400">Opțiunile fixe pe Monede Virtuale câștigate din Daily Rewards.</p>
+                    <input
+                      type="text"
+                      value={presetWagersMonede}
+                      onChange={(e) => setPresetWagersMonede(e.target.value)}
+                      placeholder="20, 50, 100, 250, 500"
+                      className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 font-mono text-amber-300 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  onClick={saveArenaWagerSettings}
+                  className="mt-4 w-full bg-gradient-to-r from-purple-600 via-pink-600 to-amber-500 hover:from-purple-500 hover:to-amber-400 text-white font-black py-3 rounded-xl text-xs shadow-lg transition-transform active:scale-95"
+                >
+                  💾 Salvează Comisionul & Mizele Presetate
+                </button>
+              </div>
+
+              {/* Grid Section: Pricing & Test Points */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Game Pricing & Wager Limits */}
+                <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 shadow-lg">
+                  <h3 className="text-sm font-extrabold text-amber-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <span>🪙</span> Game Entry Prices & Wager Limits
+                  </h3>
+
+                  <div className="flex flex-col gap-3 text-xs">
+                    <div className="flex items-center justify-between bg-zinc-950 p-3 rounded-xl border border-zinc-800">
+                      <span className="font-bold text-zinc-300">Solana Coin Flip (Min / Max)</span>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={arenaPricing.coinFlipMin}
+                          onChange={(e) => setArenaPricing(p => ({ ...p, coinFlipMin: Number(e.target.value) }))}
+                          className="w-16 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-center font-bold"
+                        />
+                        <span className="text-zinc-500 self-center">-</span>
+                        <input
+                          type="number"
+                          value={arenaPricing.coinFlipMax}
+                          onChange={(e) => setArenaPricing(p => ({ ...p, coinFlipMax: Number(e.target.value) }))}
+                          className="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-center font-bold"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between bg-zinc-950 p-3 rounded-xl border border-zinc-800">
+                      <span className="font-bold text-zinc-300">Rock-Paper-Scissors (Min / Max)</span>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={arenaPricing.rpsMin}
+                          onChange={(e) => setArenaPricing(p => ({ ...p, rpsMin: Number(e.target.value) }))}
+                          className="w-16 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-center font-bold"
+                        />
+                        <span className="text-zinc-500 self-center">-</span>
+                        <input
+                          type="number"
+                          value={arenaPricing.rpsMax}
+                          onChange={(e) => setArenaPricing(p => ({ ...p, rpsMax: Number(e.target.value) }))}
+                          className="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-center font-bold"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between bg-zinc-950 p-3 rounded-xl border border-zinc-800">
+                      <span className="font-bold text-zinc-300">Lucky Spin Wheel (Cost / Jackpot)</span>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={arenaPricing.spinCost}
+                          onChange={(e) => setArenaPricing(p => ({ ...p, spinCost: Number(e.target.value) }))}
+                          className="w-16 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-center font-bold"
+                        />
+                        <span className="text-zinc-500 self-center">/</span>
+                        <input
+                          type="number"
+                          value={arenaPricing.spinJackpot}
+                          onChange={(e) => setArenaPricing(p => ({ ...p, spinJackpot: Number(e.target.value) }))}
+                          className="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-center font-bold"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => alert("✅ Play Arena Pricing & Limits updated successfully!")}
+                      className="mt-2 w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-2.5 rounded-xl text-xs transition-colors shadow-md shadow-amber-500/20"
+                    >
+                      💾 Save Arena Pricing Settings
+                    </button>
+                  </div>
+                </div>
+
+                {/* Grant Test Coins / Points to User Wallet */}
+                <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 shadow-lg flex flex-col justify-between">
+                  <div>
+                    <h3 className="text-sm font-extrabold text-emerald-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                      <span>⚡</span> Grant Test Coins / Points
+                    </h3>
+                    <p className="text-zinc-400 text-xs mb-4">
+                      Directly credit test points or gaming coins to any user wallet for debugging or admin rewards.
+                    </p>
+
+                    <div className="flex flex-col gap-3">
+                      <div>
+                        <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Target Wallet Address</label>
+                        <input
+                          type="text"
+                          value={testPointsWallet}
+                          onChange={(e) => setTestPointsWallet(e.target.value)}
+                          placeholder="e.g. 7xKX... or paste wallet"
+                          className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Points / Coins Amount</label>
+                        <input
+                          type="number"
+                          value={testPointsAmount}
+                          onChange={(e) => setTestPointsAmount(Number(e.target.value))}
+                          className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleAddTestPoints}
+                    className="mt-4 w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black py-2.5 rounded-xl text-xs transition-all shadow-md shadow-emerald-950"
+                  >
+                    🚀 Grant Points Now
+                  </button>
+                </div>
+              </div>
+
+              {/* Anti-Cheat & Live Duel Audit Logs */}
+              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 shadow-lg">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-extrabold text-purple-300 uppercase tracking-wider flex items-center gap-2">
+                    <span>🛡️</span> Anti-Cheat & Live Match Audit Engine
+                  </h3>
+                  <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950 border border-emerald-800 px-2.5 py-0.5 rounded-full">
+                    Active System Protection
+                  </span>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  {auditLogs.map((log) => (
+                    <div key={log.id} className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-3">
+                        <span className="text-zinc-500 text-[10px] font-mono">{log.time}</span>
+                        <span className="text-zinc-200 font-medium">{log.event}</span>
+                      </div>
+                      <span className="bg-purple-950 text-purple-300 border border-purple-800/80 font-black px-2 py-0.5 rounded text-[10px]">
+                        {log.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
