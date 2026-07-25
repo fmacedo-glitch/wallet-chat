@@ -82,20 +82,17 @@ export default function AdminDashboard() {
   const [houseFeePercent, setHouseFeePercent] = useState<number>(5);
   const [presetWagersMonede, setPresetWagersMonede] = useState<string>("20, 50, 100, 250, 500");
   const [presetWagersSol, setPresetWagersSol] = useState<string>("0.05, 0.1, 0.25, 0.5, 1.0");
-  const [presetWagersUsdc, setPresetWagersUsdc] = useState<string>("1, 5, 10, 25, 50");
 
   async function saveArenaWagerSettings() {
     await Promise.all([
       supabase.from("app_settings").upsert({ key: "arena_house_fee_percent", value: houseFeePercent.toString() }),
       supabase.from("app_settings").upsert({ key: "arena_preset_wagers_monede", value: presetWagersMonede }),
       supabase.from("app_settings").upsert({ key: "arena_preset_wagers_sol", value: presetWagersSol }),
-      supabase.from("app_settings").upsert({ key: "arena_preset_wagers_usdc", value: presetWagersUsdc }),
     ]);
     if (typeof window !== "undefined") {
       localStorage.setItem("arena_house_fee_percent", houseFeePercent.toString());
       localStorage.setItem("arena_preset_wagers_monede", presetWagersMonede);
       localStorage.setItem("arena_preset_wagers_sol", presetWagersSol);
-      localStorage.setItem("arena_preset_wagers_usdc", presetWagersUsdc);
     }
     alert("✅ Comisionul și mizele presetate au fost salvate cu succes!");
   }
@@ -203,7 +200,6 @@ const [notifHistory, setNotifHistory] = useState<any[]>([]);
       if (s.key === "arena_house_fee_percent") setHouseFeePercent(Number(s.value) || 5);
       if (s.key === "arena_preset_wagers_monede") setPresetWagersMonede(s.value);
       if (s.key === "arena_preset_wagers_sol") setPresetWagersSol(s.value);
-      if (s.key === "arena_preset_wagers_usdc") setPresetWagersUsdc(s.value);
     });
   }
 
@@ -718,19 +714,6 @@ async function sendBroadcast() {
                       onChange={(e) => setPresetWagersSol(e.target.value)}
                       placeholder="0.05, 0.1, 0.25, 0.5, 1.0"
                       className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 font-mono text-cyan-300 focus:outline-none focus:border-cyan-500"
-                    />
-                  </div>
-
-                  {/* Preset Mize USDC */}
-                  <div className="bg-zinc-950 p-3.5 rounded-xl border border-zinc-800 space-y-2">
-                    <label className="font-bold text-emerald-300 block">💵 Mize Presetate USDC (Separate prin virgulă):</label>
-                    <p className="text-[11px] text-zinc-400">Opțiunile fixe pe care le au utilizatorii când creează o masă pe USDC.</p>
-                    <input
-                      type="text"
-                      value={presetWagersUsdc}
-                      onChange={(e) => setPresetWagersUsdc(e.target.value)}
-                      placeholder="1, 5, 10, 25, 50"
-                      className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 font-mono text-emerald-300 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { supabase } from "../lib/supabase";
 
 interface TabPlayProps {
@@ -10,6 +11,7 @@ interface TabPlayProps {
 }
 
 export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, selectedSingleGame }: TabPlayProps) {
+  const { sendTransaction } = useWallet();
   const [activeTab, setActiveTab] = useState<"hub" | "daily" | "pvp" | "games" | "shop" | "admin">(selectedSubTab || "hub");
 
   // Sync props if changed externally
@@ -24,7 +26,6 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
   // User Stats
   const [points, setPoints] = useState<number>(100);
   const [solBalance, setSolBalance] = useState<number>(0);
-  const [usdcBalance, setUsdcBalance] = useState<number>(0);
   const [wins, setWins] = useState<number>(0);
   const [activeTitle, setActiveTitle] = useState<string>("Novice");
   const [activeTheme, setActiveTheme] = useState<string>("default");
@@ -42,11 +43,10 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
   const [treasuryWallet, setTreasuryWallet] = useState<string>("3WDy3rzCYY5TpLJAJ6MwhWUoAHrVi7rrxtNhQ5BhizqJ");
   const [presetWagersMonede, setPresetWagersMonede] = useState<number[]>([20, 50, 100, 250, 500]);
   const [presetWagersSol, setPresetWagersSol] = useState<number[]>([0.05, 0.1, 0.25, 0.5, 1.0]);
-  const [presetWagersUsdc, setPresetWagersUsdc] = useState<number[]>([1, 5, 10, 25, 50]);
 
-  const [newTableCurrency, setNewTableCurrency] = useState<"monede" | "sol" | "usdc">("monede");
-  const [tableCurrency, setTableCurrency] = useState<"monede" | "sol" | "usdc">("monede");
-  const [lobbyFilterCurrency, setLobbyFilterCurrency] = useState<"all" | "monede" | "sol" | "usdc">("all");
+  const [newTableCurrency, setNewTableCurrency] = useState<"monede" | "sol">("monede");
+  const [tableCurrency, setTableCurrency] = useState<"monede" | "sol">("monede");
+  const [lobbyFilterCurrency, setLobbyFilterCurrency] = useState<"all" | "monede" | "sol">("all");
 
   useEffect(() => {
     supabase.from("app_settings").select("*").then(({ data }) => {
@@ -62,10 +62,6 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
             const arr = s.value.split(",").map((v: string) => Number(v.trim())).filter((n: number) => !isNaN(n) && n > 0);
             if (arr.length > 0) setPresetWagersSol(arr);
           }
-          if (s.key === "arena_preset_wagers_usdc") {
-            const arr = s.value.split(",").map((v: string) => Number(v.trim())).filter((n: number) => !isNaN(n) && n > 0);
-            if (arr.length > 0) setPresetWagersUsdc(arr);
-          }
         });
       }
     });
@@ -73,7 +69,40 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
 
   const [isOnChainLoading, setIsOnChainLoading] = useState<boolean>(false);
 
-  const checkHasBalance = (curr: "monede" | "sol" | "usdc", wager: number): boolean => {
+  const triggerCentralWalletPayout = async (recipientWallet: string, amountSol: number, tableId?: string, reason: string = "payout") => {
+    try {
+      logGameEvent(`Se trimite cererea de plată On-Chain pentru ${amountSol} SOL către ${recipientWallet.slice(0, 6)}...`, "⏳ Processing Payout");
+      const res = await fetch("/api/solana/payout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipientPublicKey: recipientWallet,
+          amountSol,
+          tableId,
+          reason,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        logGameEvent(`Plată On-Chain de ${amountSol} SOL trimisă de la Central Treasury! TX: ${data.txSignature.slice(0, 8)}...`, "✓ Sent On-Chain");
+        alert(`🎉 Plată automată On-Chain trimisă cu succes!\n\nSuma: ${amountSol} SOL\nDestinatar: ${recipientWallet}\nTx Signature: ${data.txSignature}`);
+        fetchOnChainBalances();
+        return data.txSignature;
+      } else {
+        console.warn("Central Payout notice:", data?.error);
+        logGameEvent(`Plată centralizată: ${data?.error || "Păstrat în balanță locală"}`, "ℹ️ Info");
+        if (data?.configured === false) {
+          alert(`ℹ️ Meci încheiat! Payout-ul automat pe Solana necesită configurarea cheii 'CENTRAL_SOLANA_PRIVATE_KEY' în variabila de mediu (.env) a serverului Web2.`);
+        }
+        return null;
+      }
+    } catch (err: any) {
+      console.error("Failed to trigger central wallet payout:", err);
+      return null;
+    }
+  };
+
+  const checkHasBalance = (curr: "monede" | "sol", wager: number): boolean => {
     if (curr === "sol") {
       if (!publicKey) {
         alert("🔌 Mesele cu ◎ SOL necesită conectarea unui portofel Solana (Phantom sau Solflare) din colțul din dreapta sus!");
@@ -85,17 +114,6 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
       }
       return true;
     }
-    if (curr === "usdc") {
-      if (!publicKey) {
-        alert("🔌 Mesele cu USDC necesită conectarea unui portofel Solana în colțul din dreapta sus!");
-        return false;
-      }
-      if (usdcBalance < wager) {
-        alert(`⚠️ Fonduri USDC insuficiente în portofel!\n\nBalanță USDC: ${usdcBalance.toFixed(2)} USDC\nMiză masă: ${wager} USDC`);
-        return false;
-      }
-      return true;
-    }
     if (points < wager) {
       alert(`⚠️ Monede virtuale insuficiente! Ai ${points} Monede, dar masa necesită ${wager} Monede.`);
       return false;
@@ -103,48 +121,41 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
     return true;
   };
 
-  const getBalanceFormatted = (curr: "monede" | "sol" | "usdc"): string => {
+  const getBalanceFormatted = (curr: "monede" | "sol"): string => {
     if (curr === "sol") return `${solBalance.toFixed(3)} ◎ SOL`;
-    if (curr === "usdc") return `${usdcBalance.toFixed(2)} USDC`;
     return `${points} Monede`;
   };
 
-  const saveCryptoBalance = (newSol: number, newUsdc: number) => {
+  const saveCryptoBalance = (newSol: number) => {
     const cleanSol = Math.max(0, Math.round(newSol * 1000) / 1000);
-    const cleanUsdc = Math.max(0, Math.round(newUsdc * 100) / 100);
     setSolBalance(cleanSol);
-    setUsdcBalance(cleanUsdc);
     try {
       localStorage.setItem("play_sol_balance", cleanSol.toString());
-      localStorage.setItem("play_usdc_balance", cleanUsdc.toString());
       if (publicKey) {
         supabase.from("profiles").upsert({
           wallet: publicKey.toBase58(),
           play_sol_balance: cleanSol,
-          play_usdc_balance: cleanUsdc,
         }).then(() => {});
       }
     } catch (e) {}
   };
 
-  const awardMatchWinner = (curr: "monede" | "sol" | "usdc", wager: number, fee: number) => {
+  const awardMatchWinner = async (curr: "monede" | "sol", wager: number, fee: number) => {
     const winnerPayout = getWinnerPayout(wager, fee);
     if (curr === "sol") {
-      saveCryptoBalance(solBalance + winnerPayout, usdcBalance);
+      saveCryptoBalance(solBalance + winnerPayout);
       setWins((w) => w + 1);
-    } else if (curr === "usdc") {
-      saveCryptoBalance(solBalance, usdcBalance + winnerPayout);
-      setWins((w) => w + 1);
+      if (publicKey) {
+        await triggerCentralWalletPayout(publicKey.toBase58(), winnerPayout, activeTableId || undefined, "winner_payout");
+      }
     } else {
       saveStats(points + winnerPayout, wins + 1);
     }
   };
 
-  const deductMatchLoser = (curr: "monede" | "sol" | "usdc", wager: number) => {
+  const deductMatchLoser = (curr: "monede" | "sol", wager: number) => {
     if (curr === "sol") {
-      saveCryptoBalance(solBalance - wager, usdcBalance);
-    } else if (curr === "usdc") {
-      saveCryptoBalance(solBalance, usdcBalance - wager);
+      saveCryptoBalance(solBalance - wager);
     } else {
       saveStats(Math.max(0, points - wager));
     }
@@ -153,29 +164,19 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
   const fetchOnChainBalances = async () => {
     if (!publicKey) {
       setSolBalance(0);
-      setUsdcBalance(0);
       return;
     }
     setIsOnChainLoading(true);
     try {
-      const { Connection, LAMPORTS_PER_SOL, PublicKey } = await import("@solana/web3.js");
+      const { Connection, LAMPORTS_PER_SOL } = await import("@solana/web3.js");
       const rpcEndpoints = [
-        "https://api.mainnet-beta.solana.com",
+        "https://rpc.ankr.com/solana",
+        "https://solana.drpc.org",
+        "https://solana-mainnet.rpc.extrnode.com",
         "https://solana-rpc.publicnode.com",
-        "https://rpc.ankr.com/solana"
+        "https://api.mainnet-beta.solana.com"
       ];
       let realSol: number | null = null;
-      let realUsdc: number | null = null;
-
-      const usdcMint = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-      const tokenProgramId = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-      const associatedTokenProgramId = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
-
-      // Compute USDC ATA Address deterministically
-      const [usdcAta] = PublicKey.findProgramAddressSync(
-        [publicKey.toBuffer(), tokenProgramId.toBuffer(), usdcMint.toBuffer()],
-        associatedTokenProgramId
-      );
 
       for (const endpoint of rpcEndpoints) {
         try {
@@ -188,30 +189,8 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
             ]);
             if (typeof balanceLamports === "number" && !isNaN(balanceLamports)) {
               realSol = balanceLamports / LAMPORTS_PER_SOL;
+              break;
             }
-          }
-
-          if (realUsdc === null) {
-            const accInfo = await Promise.race([
-              connection.getParsedAccountInfo(usdcAta),
-              new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 3500))
-            ]) as any;
-
-            if (accInfo && accInfo.value && accInfo.value.data && accInfo.value.data.parsed) {
-              const usdcAmount = accInfo.value.data.parsed.info?.tokenAmount?.uiAmount;
-              if (typeof usdcAmount === "number" && !isNaN(usdcAmount)) {
-                realUsdc = usdcAmount;
-              } else {
-                realUsdc = 0;
-              }
-            } else {
-              // No USDC ATA exists yet for this wallet
-              realUsdc = 0;
-            }
-          }
-
-          if (realSol !== null && realUsdc !== null) {
-            break;
           }
         } catch (e) {
           continue;
@@ -219,19 +198,13 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
       }
 
       const cleanSol = realSol !== null ? Math.round(realSol * 1000) / 1000 : 0;
-      const cleanUsdc = realUsdc !== null ? Math.round(realUsdc * 100) / 100 : 0;
-
       setSolBalance(cleanSol);
-      setUsdcBalance(cleanUsdc);
-
       localStorage.setItem("play_sol_balance", cleanSol.toString());
-      localStorage.setItem("play_usdc_balance", cleanUsdc.toString());
 
       if (publicKey) {
         supabase.from("profiles").upsert({
           wallet: publicKey.toBase58(),
           play_sol_balance: cleanSol,
-          play_usdc_balance: cleanUsdc,
         }).then(() => {});
       }
     } catch (err) {
@@ -247,9 +220,8 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
     return Math.round(payout * 1000) / 1000;
   };
 
-  const formatCurrencyBadge = (curr: "monede" | "sol" | "usdc" = "monede", amount: number) => {
+  const formatCurrencyBadge = (curr: "monede" | "sol" = "monede", amount: number) => {
     if (curr === "sol") return `◎ ${amount} SOL`;
-    if (curr === "usdc") return `💵 ${amount} USDC`;
     return `🪙 ${amount} Monede`;
   };
 
@@ -745,7 +717,6 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
 
       if (savedPoints) setPoints(parseInt(savedPoints, 10));
       if (savedSol) setSolBalance(parseFloat(savedSol));
-      if (savedUsdc) setUsdcBalance(parseFloat(savedUsdc));
       if (savedWins) setWins(parseInt(savedWins, 10));
       if (savedTitle) setActiveTitle(savedTitle);
       if (savedTheme) setActiveTheme(savedTheme);
@@ -803,7 +774,6 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
       fetchOnChainBalances();
     } else {
       setSolBalance(0);
-      setUsdcBalance(0);
     }
   }, [publicKey]);
 
@@ -886,9 +856,19 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
     return () => clearInterval(timer);
   }, [inDuelTable, tablePhase, timeLeft]);
 
-  // Delete a Created Table from Lobby
+  // Delete a Created Table from Lobby (with Refund handling for On-Chain SOL)
   const handleDeleteTable = async (tableId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+
+    // Check if table had on-chain crypto wager
+    const targetTable = lobbyTables.find((t) => t.id === tableId);
+    if (targetTable && targetTable.currency === "sol" && targetTable.txSignature) {
+      logGameEvent(`Masa ${tableId} (${targetTable.wager} SOL) a fost anulată. Se trimite cerere de restituire On-Chain de la Portofelul Central...`, "ℹ️ Refund Initiated");
+      if (targetTable.hostWallet && targetTable.hostWallet !== "guest") {
+        await triggerCentralWalletPayout(targetTable.hostWallet, targetTable.wager, tableId, "table_cancel_refund");
+      }
+    }
+
     setLobbyTables((prev) => {
       const updated = prev.filter((t) => t.id !== tableId);
       try { localStorage.setItem("play_arena_tables", JSON.stringify(updated)); } catch (err) {}
@@ -896,7 +876,11 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
     });
     broadcastTableEvent("table_removed", { tableId });
     try {
-      await supabase.from("arena_tables").delete().eq("id", tableId);
+      if (targetTable && targetTable.currency === "sol" && targetTable.txSignature) {
+        await supabase.from("arena_tables").update({ status: "refunded" }).eq("id", tableId);
+      } else {
+        await supabase.from("arena_tables").delete().eq("id", tableId);
+      }
     } catch (err) {}
   };
 
@@ -925,11 +909,100 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
     setPlayerChoice(null);
   };
 
+  // Perform On-Chain Solana Deposit via Phantom Approval to Central Wallet
+  const executeOnChainWagerDeposit = async (currency: "monede" | "sol", amount: number): Promise<string | null> => {
+    if (currency === "monede") return "offchain_monede";
+    if (!publicKey) {
+      alert("🔌 Pentru meciuri pe bani reali (SOL) trebuie să conectezi portofelul Solana (Phantom / Solflare) din colțul din dreapta sus!");
+      return null;
+    }
+
+    try {
+      const { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } = await import("@solana/web3.js");
+      const rpcEndpoints = [
+        "https://rpc.ankr.com/solana",
+        "https://solana.drpc.org",
+        "https://solana-mainnet.rpc.extrnode.com",
+        "https://solana-rpc.publicnode.com",
+        "https://api.mainnet-beta.solana.com"
+      ];
+
+      let activeConnection: any = null;
+      let latestBlockhash: string = "";
+
+      for (const endpoint of rpcEndpoints) {
+        try {
+          const conn = new Connection(endpoint, { commitment: "confirmed" });
+          const bh = await Promise.race([
+            conn.getLatestBlockhash("finalized"),
+            new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 3000))
+          ]);
+          if (bh && bh.blockhash) {
+            activeConnection = conn;
+            latestBlockhash = bh.blockhash;
+            break;
+          }
+        } catch (e) {
+          // Continue trying next RPC endpoint
+        }
+      }
+
+      if (!activeConnection || !latestBlockhash) {
+        throw new Error("Nu s-a putut conecta la nicio nod-RPC Solana. Verifică conexiunea la internet sau încearcă din nou.");
+      }
+
+      const destPubkey = new PublicKey(treasuryWallet);
+
+      const lamports = Math.round(amount * LAMPORTS_PER_SOL);
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey: destPubkey,
+          lamports,
+        })
+      );
+
+      transaction.recentBlockhash = latestBlockhash;
+      transaction.feePayer = publicKey;
+
+      logGameEvent(`Se solicită aprobarea în Phantom pentru miza de ${amount} SOL către Central Escrow...`, "⏳ Pending Wallet");
+      const txSig = await sendTransaction(transaction, activeConnection);
+      logGameEvent(`Miză SOL trimisă On-Chain către Portofelul Central: ${txSig.slice(0, 8)}...`, "✓ Approved");
+      return txSig;
+    } catch (err: any) {
+      console.error("Phantom wager deposit failed:", err);
+      const isUserRejected =
+        err?.name === "WalletSendTransactionError" ||
+        err?.message?.toLowerCase().includes("rejected") ||
+        err?.message?.toLowerCase().includes("cancel") ||
+        err?.message?.toLowerCase().includes("user rejected");
+
+      if (isUserRejected) {
+        logGameEvent(`Tranzacția a fost anulată de tine în Phantom. Masa NU a fost creată.`, "❌ Cancelled");
+        alert("❌ Tranzacția a fost anulată în Phantom. Masa nu a fost creată și nicio sumă nu a fost retrasă din contul tău.");
+      } else {
+        logGameEvent(`Tranzacție eșuată: ${err?.message || "Eroare Phantom"}`, "❌ Failed");
+        alert(`⚠️ Tranzacția în Phantom a fost anulată sau a eșuat:\n${err?.message || "Anulată de utilizator"}`);
+      }
+      return null;
+    }
+  };
+
   // Create User Custom Table
   const handleCreateCustomTable = async () => {
     if (!checkHasBalance(newTableCurrency, newTableWager)) {
       alert(`⚠️ Fonduri insuficiente! Masa necesită ${formatCurrencyBadge(newTableCurrency, newTableWager)}, dar balanța ta este de ${getBalanceFormatted(newTableCurrency)}.`);
       return;
+    }
+
+    // Trigger Real Solana / Phantom Transaction if wager is SOL
+    let txSig: string | null = null;
+    if (newTableCurrency === "sol") {
+      txSig = await executeOnChainWagerDeposit(newTableCurrency, newTableWager);
+      if (!txSig) {
+        // User cancelled Phantom transaction
+        return;
+      }
     }
 
     const myName = publicKey ? (getDisplayName ? getDisplayName(publicKey.toBase58()) : `${publicKey.toBase58().slice(0, 4)}...`) : "Host User";
@@ -946,6 +1019,7 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
       wager: newTableWager,
       currency: newTableCurrency,
       isAI: false,
+      txSignature: txSig,
     };
 
     setLobbyTables((prev) => {
@@ -972,6 +1046,7 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
         currency: newTbl.currency,
         is_ai: false,
         status: "open",
+        host_tx_signature: txSig,
       });
     } catch (err) {}
 
@@ -992,8 +1067,8 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
     setRoundWinner(null);
     setDuelLogMessage(
       targetPlayer
-        ? `⚔️ Masa a fost creată! L-ai provocat pe ${targetPlayer}. Se așteaptă acceptarea provocării...`
-        : "⏳ Masa a fost creată! Se așteaptă intrarea unui adversar în duel..."
+        ? `⚔️ Masa a fost creată! Miza de ${formatCurrencyBadge(newTableCurrency, newTableWager)} a fost depusă On-Chain. L-ai provocat pe ${targetPlayer}. Se așteaptă acceptarea...`
+        : `⏳ Masa a fost creată! Miza de ${formatCurrencyBadge(newTableCurrency, newTableWager)} depusă On-Chain. Se așteaptă un adversar...`
     );
     setTttGrid(Array(9).fill(null));
 
@@ -1033,11 +1108,21 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
     oppAvatar: string,
     isAI: boolean,
     tableId?: string,
-    currency: "monede" | "sol" | "usdc" = "monede"
+    currency: "monede" | "sol" = "monede"
   ) => {
     if (!checkHasBalance(currency, wager)) {
       alert(`⚠️ Fonduri insuficiente! Această masă are miza de ${formatCurrencyBadge(currency, wager)}, dar balanța ta este de ${getBalanceFormatted(currency)}.`);
       return;
+    }
+
+    // Trigger Real Solana / Phantom Transaction if wager is SOL
+    let guestTxSig: string | null = null;
+    if (currency === "sol") {
+      guestTxSig = await executeOnChainWagerDeposit(currency, wager);
+      if (!guestTxSig) {
+        // User cancelled Phantom transaction
+        return;
+      }
     }
 
     const myName = publicKey ? (getDisplayName ? getDisplayName(publicKey.toBase58()) : `${publicKey.toBase58().slice(0, 4)}...`) : "Gamer";
@@ -1059,7 +1144,8 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
             status: "in_game",
             guest_name: myName,
             guest_wallet: myWallet,
-            guest_avatar: "⚔️"
+            guest_avatar: "⚔️",
+            guest_tx_signature: guestTxSig
           })
           .eq("id", tableId);
         if (updateErr) console.error("Supabase join table error:", updateErr);
@@ -1640,10 +1726,6 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
               ◎ {publicKey ? `${solBalance.toFixed(3)} SOL` : "0.00 SOL"}
             </span>
             <span className="text-zinc-700">|</span>
-            <span className="text-emerald-300 font-extrabold flex items-center gap-1" title="Balanță Live USDC (Solana SPL Token)">
-              💵 {publicKey ? `$${usdcBalance.toFixed(2)} USDC` : "$0.00 USDC"}
-            </span>
-            <span className="text-zinc-700">|</span>
             <span className="text-purple-300 font-bold flex items-center gap-1" title="Victorii Total">
               🏆 {wins}
             </span>
@@ -1661,7 +1743,7 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
                 🪙
               </div>
               <div className="overflow-hidden">
-                <div className="text-[10px] text-zinc-400 font-bold uppercase truncate">Monede Daily</div>
+                <div className="text-[10px] text-zinc-400 font-bold uppercase truncate">Monede Virtuale</div>
                 <div className="text-xs font-black text-amber-300">{points} Monede</div>
               </div>
             </div>
@@ -1685,21 +1767,17 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
               </div>
             </div>
 
-            <div className="bg-zinc-950/80 border border-emerald-500/30 rounded-xl p-2.5 flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 font-black flex items-center justify-center text-base flex-shrink-0">
-                💵
+            <div className="bg-zinc-950/80 border border-purple-500/30 rounded-xl p-2.5 flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-purple-500/20 text-purple-300 font-black flex items-center justify-center text-base flex-shrink-0">
+                🛡️
               </div>
               <div className="overflow-hidden">
                 <div className="text-[10px] text-zinc-400 font-bold uppercase flex items-center gap-1.5 truncate">
-                  <span>USDC Real Portofel</span>
-                  {publicKey ? (
-                    <span className="text-[8px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1 rounded font-extrabold">LIVE SPL</span>
-                  ) : (
-                    <span className="text-[8px] bg-red-500/20 text-red-400 border border-red-500/30 px-1 rounded font-extrabold">NECONECTAT</span>
-                  )}
+                  <span>Portofel Central Escrow</span>
+                  <span className="text-[8px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1 rounded font-extrabold">SERVER WEB2</span>
                 </div>
-                <div className="text-xs font-black text-emerald-300">
-                  {publicKey ? `$${usdcBalance.toFixed(2)} USDC` : "Conectează Portofel"}
+                <div className="text-[11px] font-bold text-purple-200 truncate">
+                  {treasuryWallet ? `${treasuryWallet.slice(0, 4)}...${treasuryWallet.slice(-4)}` : "Treasury Configat"}
                 </div>
               </div>
             </div>
@@ -1754,7 +1832,8 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
                     myChallenges[0].host,
                     myChallenges[0].avatar,
                     myChallenges[0].isAI,
-                    myChallenges[0].id
+                    myChallenges[0].id,
+                    myChallenges[0].currency || "monede"
                   );
                 }}
                 className="bg-gradient-to-r from-amber-400 to-yellow-400 hover:from-amber-300 hover:to-yellow-300 text-black font-black px-4 py-2.5 rounded-xl text-xs shadow-lg flex-1 sm:flex-none transition-transform active:scale-95"
@@ -1981,18 +2060,17 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
 
                         <div>
                           <label className="text-xs text-zinc-400 font-bold block mb-1">Monedă / Tip Miză:</label>
-                          <div className="grid grid-cols-3 gap-2">
+                          <div className="grid grid-cols-2 gap-2">
                             {[
-                              { id: "monede", label: "🪙 Monede", sub: "Daily Reward" },
+                              { id: "monede", label: "🪙 Monede", sub: "Virtual Free" },
                               { id: "sol", label: "◎ SOL", sub: "Solana Real" },
-                              { id: "usdc", label: "💵 USDC", sub: "Crypto Real" },
                             ].map((c) => (
                               <button
                                 key={c.id}
                                 onClick={() => {
                                   const curr = c.id as any;
                                   setNewTableCurrency(curr);
-                                  const presets = curr === "sol" ? presetWagersSol : curr === "usdc" ? presetWagersUsdc : presetWagersMonede;
+                                  const presets = curr === "sol" ? presetWagersSol : presetWagersMonede;
                                   if (presets.length > 0) setNewTableWager(presets[0]);
                                 }}
                                 className={`p-2 rounded-xl text-xs font-bold border flex flex-col items-center justify-center transition-all ${
@@ -2011,7 +2089,7 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
                         <div>
                           <label className="text-xs text-zinc-400 font-bold block mb-1">Alege Miza Presetată:</label>
                           <div className="flex flex-wrap gap-2">
-                            {(newTableCurrency === "sol" ? presetWagersSol : newTableCurrency === "usdc" ? presetWagersUsdc : presetWagersMonede).map((w) => (
+                            {(newTableCurrency === "sol" ? presetWagersSol : presetWagersMonede).map((w) => (
                               <button
                                 key={w}
                                 onClick={() => setNewTableWager(w)}
@@ -2031,7 +2109,7 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
                         <div className="bg-zinc-950 p-3 rounded-2xl border border-purple-500/30 flex items-center justify-between text-xs">
                           <span className="text-zinc-400 font-bold">Potențial Câștigător:</span>
                           <span className="text-amber-400 font-black text-sm">
-                            🏆 {getWinnerPayout(newTableWager, houseFeePercent)} {newTableCurrency === "sol" ? "SOL" : newTableCurrency === "usdc" ? "USDC" : "Monede"}
+                            🏆 {getWinnerPayout(newTableWager, houseFeePercent)} {newTableCurrency === "sol" ? "SOL" : "Monede"}
                           </span>
                         </div>
 
@@ -2081,7 +2159,6 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
                         { id: "all", label: "Toate" },
                         { id: "monede", label: "🪙 Monede" },
                         { id: "sol", label: "◎ SOL" },
-                        { id: "usdc", label: "💵 USDC" },
                       ].map((f) => (
                         <button
                           key={f.id}
@@ -2144,6 +2221,10 @@ export function TabPlay({ publicKey, profiles, getDisplayName, selectedSubTab, s
                                   <div className="flex items-center gap-1.5">
                                     <button
                                       onClick={() => {
+                                        if (tblCurr === "sol" && !tbl.txSignature) {
+                                          alert("⚠️ Miza pentru această masă nu a fost depusă On-Chain. Anulează masa și creează una nouă.");
+                                          return;
+                                        }
                                         setInDuelTable(true);
                                         setIsHostOfTable(true);
                                         setActiveCreatedTableId(tbl.id);
